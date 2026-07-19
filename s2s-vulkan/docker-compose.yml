@@ -4,6 +4,10 @@
 #   docker compose pull && docker compose up -d
 #   docker compose --profile full up -d
 #
+# Web test UI (optional):
+#   docker compose --profile web up -d --build
+#   open http://localhost:8088
+#
 # NVIDIA:
 #   docker compose -f docker-compose.yml -f docker/docker-compose.nvidia.yml --profile full up -d
 
@@ -82,8 +86,9 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command:
+      # Use websocket for the web lab (binary PCM). realtime also works without the UI.
       - --mode
-      - ${S2S_MODE:-realtime}
+      - ${S2S_MODE:-websocket}
       - --host
       - "0.0.0.0"
       - --port
@@ -182,6 +187,24 @@ services:
     group_add:
       - "${VIDEO_GID:-44}"
       - "${RENDER_GID:-109}"
+    networks:
+      - s2s
+    restart: unless-stopped
+
+  # ── Optional fancy web test UI ─────────────────────────────────────
+  # docker compose --profile web up -d --build
+  # Browser: http://localhost:8088  (WS via same origin /ws → s2s:8765)
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: ${WEB_IMAGE:-s2s-web:local}
+    container_name: s2s-web
+    profiles: ["web", "full"]
+    depends_on:
+      - s2s
+    ports:
+      - "${WEB_PORT:-8088}:80"
     networks:
       - s2s
     restart: unless-stopped

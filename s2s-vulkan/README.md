@@ -198,6 +198,41 @@ Turn taking: after VAD emits a final segment, listening pauses until TTS signals
 - Silero ONNX VAD (energy VAD is enough for PTT / quiet rooms)  
 - Progressive live captions during speech  
 
+## Web test UI (`web/`)
+
+Optional browser lab for the raw PCM WebSocket backend:
+
+- Full-viewport reactive particle / waveform canvas (mic + playback energy)
+- Large animated circular hold-to-talk / toggle button
+- Connection panel, level meters, log
+
+### Local (no Docker)
+
+```bash
+# terminal 1 — backend in websocket mode
+cargo run --release -- --mode websocket --host 0.0.0.0 --port 8765
+
+# terminal 2 — static server
+cd web && python -m http.server 8088
+# open http://127.0.0.1:8088
+```
+
+Set WebSocket to `ws://127.0.0.1:8765` (default) and hold the orb.
+
+### Docker (optional profile)
+
+```bash
+docker compose --profile web up -d --build
+# UI:  http://localhost:8088
+# WS:  same origin /ws  →  proxied to s2s:8765
+```
+
+Also included in `--profile full`.
+
+Env: `WEB_PORT=8088`.
+
+> Backend must run with `--mode websocket` for binary PCM. Compose default is `realtime`; for the lab set `S2S_MODE=websocket` (or change the `s2s` command).
+
 ## GitHub Container Registry (GHCR)
 
 CI workflow: [`.github/workflows/ghcr.yml`](../.github/workflows/ghcr.yml) (monorepo root) and [`s2s-vulkan/.github/workflows/ghcr.yml`](.github/workflows/ghcr.yml).

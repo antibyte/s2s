@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>s2s lab — voice test</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@300;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <canvas id="fx" aria-hidden="true"></canvas>
+  <div class="vignette"></div>
+
+  <header class="top">
+    <div class="brand">
+      <span class="logo-dot"></span>
+      <span>s2s<span class="dim">lab</span></span>
+    </div>
+    <div class="status" id="status">
+      <span class="pill" id="pill-conn" data-state="off">offline</span>
+      <span class="pill" id="pill-mode" data-state="idle">idle</span>
+    </div>
+  </header>
+
+  <main class="stage">
+    <div class="orb-wrap">
+      <div class="orbit o1"></div>
+      <div class="orbit o2"></div>
+      <div class="orbit o3"></div>
+
+      <button
+        id="mic"
+        class="mic-btn"
+        type="button"
+        aria-label="Hold to talk"
+        title="Hold to talk / click to toggle"
+      >
+        <span class="mic-ring r1"></span>
+        <span class="mic-ring r2"></span>
+        <span class="mic-ring r3"></span>
+        <span class="mic-core">
+          <svg class="mic-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 14a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v4a3 3 0 0 0 3 3Z" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M19 11a7 7 0 0 1-14 0" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="M12 18v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          <span class="mic-label" id="mic-label">hold</span>
+        </span>
+      </button>
+    </div>
+
+    <p class="hint" id="hint">Connect, then hold the button and speak.</p>
+  </main>
+
+  <aside class="panel" id="panel">
+    <details open>
+      <summary>Connection</summary>
+      <label>
+        WebSocket
+        <input id="ws-url" type="text" spellcheck="false" autocomplete="off"
+          placeholder="ws://127.0.0.1:8765" />
+      </label>
+      <label class="row">
+        <span>Mode</span>
+        <select id="talk-mode">
+          <option value="hold">Push-to-talk (hold)</option>
+          <option value="toggle">Toggle</option>
+        </select>
+      </label>
+      <div class="btn-row">
+        <button type="button" class="btn primary" id="btn-connect">Connect</button>
+        <button type="button" class="btn" id="btn-disconnect" disabled>Disconnect</button>
+      </div>
+    </details>
+    <details>
+      <summary>Levels</summary>
+      <div class="meters">
+        <div class="meter"><span>mic</span><div class="bar"><i id="bar-mic"></i></div></div>
+        <div class="meter"><span>out</span><div class="bar"><i id="bar-out"></i></div></div>
+      </div>
+    </details>
+    <details>
+      <summary>Log</summary>
+      <pre id="log" class="log"></pre>
+    </details>
+  </aside>
+
+  <footer class="foot">
+    <span>PCM 16 kHz mono · raw WebSocket</span>
+    <span id="fps"></span>
+  </footer>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
