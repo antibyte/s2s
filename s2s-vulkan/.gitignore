@@ -1,11 +1,15 @@
 /target
 **/*.rs.bk
 .DS_Store
+# Local model weights (never commit)
 models/
+models/supertonic/
 *.gguf
 *.bin
 *.onnx
 *.wav
+logs-s2s.*
+logs-web.*
 __pycache__/
 .venv/
 .env
