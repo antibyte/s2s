@@ -1,0 +1,25 @@
+# Optional TTS sidecar: Qwen3-TTS via faster-qwen3-tts (GGML Vulkan when wheel supports it).
+# Build on a machine with the Vulkan wheel available, or install CPU wheel for bring-up.
+
+FROM python:3.12-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libvulkan1 mesa-vulkan-drivers vulkan-tools \
+        libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY scripts/tts_qwen_server.py /app/tts_qwen_server.py
+
+# Default: try PyPI / CPU; override with a Vulkan wheel in a custom build.
+RUN pip install --no-cache-dir \
+        fastapi uvicorn soundfile numpy \
+        "faster-qwen3-tts" \
+    || pip install --no-cache-dir fastapi uvicorn soundfile numpy
+
+ENV GGML_BACKEND=Vulkan0 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+
+EXPOSE 8083
+CMD ["python", "/app/tts_qwen_server.py", "--host", "0.0.0.0", "--port", "8083", "--quant", "Q4_K_M"]

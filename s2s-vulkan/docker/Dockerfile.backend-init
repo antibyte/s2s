@@ -1,0 +1,11 @@
+# Lightweight init container: only downloads models into a shared volume.
+# Used by compose so whisper/llama start after files exist.
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/download-models.sh /usr/local/bin/download-models.sh
+RUN chmod +x /usr/local/bin/download-models.sh
+ENV S2S_MODELS_DIR=/models \
+    S2S_DOWNLOAD_MODELS=auto
+VOLUME ["/models"]
+ENTRYPOINT ["/usr/local/bin/download-models.sh"]

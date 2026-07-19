@@ -1,0 +1,42 @@
+[package]
+name = "s2s-vulkan"
+version = "0.1.0"
+edition = "2021"
+description = "Speech-to-speech voice agent pipeline with Vulkan-backed GGML inference (whisper.cpp + llama.cpp + TTS)"
+license = "Apache-2.0"
+readme = "README.md"
+keywords = ["speech", "vad", "stt", "tts", "vulkan", "whisper", "llama"]
+categories = ["multimedia::audio", "command-line-utilities"]
+
+[[bin]]
+name = "s2s-vulkan"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
+cpal = "0.15"
+futures-util = "0.3"
+hound = "3.5"
+parking_lot = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.26"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors"] }
+rubato = "0.16"
+byteorder = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

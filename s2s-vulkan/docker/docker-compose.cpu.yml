@@ -1,0 +1,15 @@
+# Override: force CPU, no GPU device requests (CI / smoke).
+#   docker compose -f docker-compose.yml -f docker/docker-compose.cpu.yml up s2s
+
+services:
+  s2s:
+    environment:
+      S2S_GPU: cpu
+      GGML_BACKEND: CPU
+      NVIDIA_VISIBLE_DEVICES: ""
+    gpus: null
+    devices: []
+    deploy:
+      resources:
+        reservations:
+          devices: []

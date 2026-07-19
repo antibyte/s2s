@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+.DS_Store
+models/
+*.gguf
+*.bin
+*.onnx
+*.wav
+__pycache__/
+.venv/
+.env
+!.env.example

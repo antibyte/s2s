@@ -1,0 +1,195 @@
+# s2s-vulkan — GHCR image + first-boot model download
+#
+#   cp .env.example .env   # set GHCR_OWNER / IMAGE
+#   docker compose pull && docker compose up -d
+#   docker compose --profile full up -d
+#
+# NVIDIA:
+#   docker compose -f docker-compose.yml -f docker/docker-compose.nvidia.yml --profile full up -d
+
+x-gpu-env: &gpu-env
+  S2S_GPU: ${S2S_GPU:-auto}
+  GGML_BACKEND: ${GGML_BACKEND:-}
+  NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+  NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility,graphics}
+
+x-model-env: &model-env
+  S2S_MODELS_DIR: /models
+  S2S_DOWNLOAD_MODELS: ${S2S_DOWNLOAD_MODELS:-auto}
+  S2S_DOWNLOAD_FORCE: ${S2S_DOWNLOAD_FORCE:-0}
+  S2S_DOWNLOAD_WHISPER: ${S2S_DOWNLOAD_WHISPER:-true}
+  S2S_DOWNLOAD_LLM: ${S2S_DOWNLOAD_LLM:-true}
+  S2S_DOWNLOAD_TTS: ${S2S_DOWNLOAD_TTS:-false}
+  S2S_WHISPER_PRESET: ${S2S_WHISPER_PRESET:-small}
+  S2S_WHISPER_HF_REPO: ${S2S_WHISPER_HF_REPO:-ggerganov/whisper.cpp}
+  S2S_WHISPER_HF_FILE: ${S2S_WHISPER_HF_FILE:-}
+  S2S_WHISPER_MODEL_URL: ${S2S_WHISPER_MODEL_URL:-}
+  S2S_LLM_HF_REPO: ${S2S_LLM_HF_REPO:-Qwen/Qwen2.5-1.5B-Instruct-GGUF}
+  S2S_LLM_HF_FILE: ${S2S_LLM_HF_FILE:-qwen2.5-1.5b-instruct-q4_k_m.gguf}
+  S2S_LLM_MODEL_URL: ${S2S_LLM_MODEL_URL:-}
+  S2S_DOWNLOAD_EXTRA: ${S2S_DOWNLOAD_EXTRA:-}
+  S2S_HF_TOKEN: ${S2S_HF_TOKEN:-${HF_TOKEN:-}}
+  HF_TOKEN: ${HF_TOKEN:-${S2S_HF_TOKEN:-}}
+
+x-dri-devices: &dri-devices
+  - /dev/dri:/dev/dri
+
+services:
+  # ── One-shot model fetcher (shared volume) ─────────────────────────
+  model-init:
+    image: ${IMAGE:-ghcr.io/${GHCR_OWNER:-local}/s2s-vulkan}:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: s2s-model-init
+    entrypoint: ["/usr/local/bin/download-models.sh"]
+    environment:
+      <<: [*gpu-env, *model-env]
+    volumes:
+      - models:/models
+    restart: "no"
+    networks:
+      - s2s
+
+  # ── Orchestrator ───────────────────────────────────────────────────
+  s2s:
+    image: ${IMAGE:-ghcr.io/${GHCR_OWNER:-local}/s2s-vulkan}:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: s2s-vulkan
+    restart: unless-stopped
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      <<: [*gpu-env, *model-env]
+      S2S_DOCKER: "1"
+      RUST_LOG: ${RUST_LOG:-info}
+      S2S_WHISPER_URL: ${S2S_WHISPER_URL:-http://whisper:8082}
+      S2S_LLM_URL: ${S2S_LLM_URL:-http://llama:8081/v1}
+      S2S_LLM_API_KEY: ${S2S_LLM_API_KEY:-}
+      S2S_LLM_MODEL: ${S2S_LLM_MODEL:-local-model}
+      S2S_TTS_URL: ${S2S_TTS_URL:-http://tts:8083/v1/audio/speech}
+    ports:
+      - "${S2S_PORT:-8765}:8765"
+    volumes:
+      - models:/models
+    devices: *dri-devices
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - --mode
+      - ${S2S_MODE:-realtime}
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8765"
+      - --gpu
+      - ${S2S_GPU:-auto}
+      - --tts
+      - ${S2S_TTS:-http}
+    networks:
+      - s2s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/s2s-vulkan", "--list-gpus"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 120s
+
+  whisper:
+    image: ${WHISPER_IMAGE:-ghcr.io/ggml-org/whisper.cpp:main}
+    container_name: s2s-whisper
+    profiles: ["backends", "full"]
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *gpu-env
+    volumes:
+      - models:/models:ro
+    ports:
+      - "${WHISPER_PORT:-8082}:8082"
+    devices: *dri-devices
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+    command:
+      - -m
+      - /models/whisper/${WHISPER_MODEL_FILE:-ggml-small.bin}
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8082"
+      - --language
+      - ${WHISPER_LANGUAGE:-auto}
+    networks:
+      - s2s
+    restart: unless-stopped
+
+  llama:
+    image: ${LLAMA_IMAGE:-ghcr.io/ggerganov/llama.cpp:server}
+    container_name: s2s-llama
+    profiles: ["backends", "full"]
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *gpu-env
+    volumes:
+      - models:/models:ro
+    ports:
+      - "${LLAMA_PORT:-8081}:8081"
+    devices: *dri-devices
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+    command:
+      - -m
+      - /models/llm/${LLAMA_MODEL_FILE:-qwen2.5-1.5b-instruct-q4_k_m.gguf}
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8081"
+      - -ngl
+      - "${LLAMA_NGL:-999}"
+      - -c
+      - "${LLAMA_CTX:-8192}"
+    networks:
+      - s2s
+    restart: unless-stopped
+
+  tts:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.tts
+    image: ${TTS_IMAGE:-s2s-tts-qwen:local}
+    container_name: s2s-tts
+    profiles: ["tts", "full"]
+    environment:
+      <<: *gpu-env
+      GGML_BACKEND: ${GGML_BACKEND:-Vulkan0}
+      S2S_HF_TOKEN: ${S2S_HF_TOKEN:-${HF_TOKEN:-}}
+    volumes:
+      - models:/models
+    ports:
+      - "${TTS_PORT:-8083}:8083"
+    devices: *dri-devices
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+    networks:
+      - s2s
+    restart: unless-stopped
+
+volumes:
+  models:
+    name: ${MODELS_VOLUME:-s2s-models}
+
+networks:
+  s2s:
+    driver: bridge
