@@ -212,12 +212,16 @@ Optional browser lab for the raw PCM WebSocket backend:
 # terminal 1 — backend in websocket mode
 cargo run --release -- --mode websocket --host 0.0.0.0 --port 8765
 
-# terminal 2 — static server
-cd web && python -m http.server 8088
-# open http://127.0.0.1:8088
+# terminal 2 — HTTPS UI (required for microphone from other devices)
+cd web
+python serve.py --host 0.0.0.0 --port 9999 --backend 127.0.0.1:8765
+# open https://127.0.0.1:9999  (or https://<LAN-IP>:9999 from another PC)
 ```
 
-Set WebSocket to `ws://127.0.0.1:8765` (default) and hold the orb.
+Browsers only allow the microphone in a **secure context** (`https://` or `http://localhost`).
+`serve.py` generates a self-signed cert and proxies `wss://…/ws` → the backend so there is no mixed content.
+
+From another PC: open `https://<this-machine-ip>:9999`, accept the certificate warning once, Connect, hold the orb.
 
 ### Docker (optional profile)
 

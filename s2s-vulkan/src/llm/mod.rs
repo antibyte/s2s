@@ -19,6 +19,7 @@ pub async fn run_llm(
     cfg: Config,
     mut stt_in: mpsc::Receiver<QueueItem<Transcription>>,
     llm_out: mpsc::Sender<QueueItem<LlmChunk>>,
+    should_listen: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     info!(
         "LLM handler started → {} model={}",
@@ -47,10 +48,12 @@ pub async fn run_llm(
                     role: "system".into(),
                     content: cfg.system_prompt.clone(),
                 });
+                should_listen.store(true, std::sync::atomic::Ordering::Relaxed);
                 continue;
             }
             QueueItem::Data(tr) => {
                 if tr.partial || tr.text.trim().is_empty() {
+                    should_listen.store(true, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 }
                 history.push(ChatMessage {
@@ -60,24 +63,65 @@ pub async fn run_llm(
                 // Keep history bounded (system + last N turns).
                 trim_history(&mut history, cfg.chat_size);
 
-                match if cfg.llm_stream {
+                let result = if cfg.llm_stream {
                     stream_completion(&client, &cfg, &history, &tr, &llm_out).await
                 } else {
                     complete_once(&client, &cfg, &history, &tr, &llm_out).await
-                } {
+                };
+
+                match result {
                     Ok(assistant) => {
                         if !assistant.is_empty() {
                             history.push(ChatMessage {
                                 role: "assistant".into(),
                                 content: assistant,
                             });
+                        } else {
+                            // No TTS will fire — reopen listening.
+                            should_listen.store(true, std::sync::atomic::Ordering::Relaxed);
                         }
                     }
-                    Err(e) => error!("LLM failed: {e:#}"),
+                    Err(e) => {
+                        error!("LLM failed: {e:#} — using local echo fallback");
+                        // Keep the voice loop alive without an external LLM.
+                        let fallback = format!(
+                            "I heard you say: {}. (LLM backend unreachable — start Ollama or llama-server.)",
+                            tr.text.trim()
+                        );
+                        if emit_text_chunks(&llm_out, &fallback, &tr).await.is_err() {
+                            should_listen.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+async fn emit_text_chunks(
+    out: &mpsc::Sender<QueueItem<LlmChunk>>,
+    text: &str,
+    tr: &Transcription,
+) -> Result<()> {
+    for sentence in split_sentences(text) {
+        out.send(QueueItem::Data(LlmChunk {
+            text: sentence,
+            language: tr.language.clone(),
+            turn: tr.turn.clone(),
+            is_final: false,
+        }))
+        .await
+        .map_err(|_| anyhow!("llm_out closed"))?;
+    }
+    out.send(QueueItem::Data(LlmChunk {
+        text: String::new(),
+        language: tr.language.clone(),
+        turn: tr.turn.clone(),
+        is_final: true,
+    }))
+    .await
+    .map_err(|_| anyhow!("llm_out closed"))?;
+    Ok(())
 }
 
 fn trim_history(history: &mut Vec<ChatMessage>, chat_size: usize) {

@@ -42,14 +42,16 @@ pub fn spawn_pipeline(cfg: Config) -> PipelineHandles {
     }
     {
         let cfg = cfg.clone();
+        let should_listen = should_listen.clone();
         join.push(tokio::spawn(async move {
-            stt::run_stt(cfg, vad_rx, stt_tx).await;
+            stt::run_stt(cfg, vad_rx, stt_tx, should_listen).await;
         }));
     }
     {
         let cfg = cfg.clone();
+        let should_listen = should_listen.clone();
         join.push(tokio::spawn(async move {
-            llm::run_llm(cfg, stt_rx, llm_tx).await;
+            llm::run_llm(cfg, stt_rx, llm_tx, should_listen).await;
         }));
     }
     {

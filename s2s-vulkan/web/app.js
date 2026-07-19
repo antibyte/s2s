@@ -47,17 +47,23 @@ const state = {
 const params = new URLSearchParams(location.search);
 function defaultWsUrl() {
   if (params.get("ws")) return params.get("ws");
+  // Prefer same-origin /ws when page is HTTPS (serve.py / nginx proxy → s2s).
+  // Required from other machines: getUserMedia only works in secure contexts.
+  if (location.protocol === "https:") {
+    return `wss://${location.host}/ws`;
+  }
   const saved = localStorage.getItem("s2s.ws");
   if (saved) return saved;
-  // Served from the optional web container: same-origin nginx proxies /ws → s2s.
-  if (location.port === "8088" || location.pathname === "/" && !location.port) {
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${location.host}/ws`;
-  }
+  // Local plain HTTP (localhost only is a secure context for mic).
   const host =
     location.hostname === "localhost" || location.hostname === "127.0.0.1"
       ? "127.0.0.1"
       : location.hostname;
+  if (host !== "127.0.0.1" && host !== "localhost") {
+    console.warn(
+      "Page is not HTTPS — microphone will be blocked on remote devices. Use: python serve.py"
+    );
+  }
   return `ws://${host}:8765`;
 }
 const defaultWs = defaultWsUrl();
@@ -387,7 +393,16 @@ function playPcmI16(arrayBuffer) {
 function connect() {
   const url = els.wsUrl.value.trim();
   if (!url) return;
-  localStorage.setItem("s2s.ws", url);
+  // Only persist non-default manual overrides when not on HTTPS proxy path
+  if (!(location.protocol === "https:" && url.endsWith("/ws"))) {
+    localStorage.setItem("s2s.ws", url);
+  }
+  if (location.protocol === "https:" && url.startsWith("ws://")) {
+    log("WARN: page is HTTPS but WS URL is ws:// — browser may block mixed content. Use wss://…/ws");
+  }
+  if (location.protocol === "http:" && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") {
+    log("WARN: microphone requires HTTPS (or localhost). Start UI with: python serve.py");
+  }
   if (state.ws) {
     try {
       state.ws.close();

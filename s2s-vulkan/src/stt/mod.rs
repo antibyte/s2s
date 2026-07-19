@@ -13,6 +13,7 @@ pub async fn run_stt(
     cfg: Config,
     mut vad_in: mpsc::Receiver<QueueItem<VadAudio>>,
     stt_out: mpsc::Sender<QueueItem<Transcription>>,
+    should_listen: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     info!("STT handler started → {}", cfg.whisper_url);
     let client = reqwest::Client::builder()
@@ -26,7 +27,10 @@ pub async fn run_stt(
                 let _ = stt_out.send(QueueItem::end()).await;
                 break;
             }
-            QueueItem::Control(Control::SessionEnd) => continue,
+            QueueItem::Control(Control::SessionEnd) => {
+                should_listen.store(true, std::sync::atomic::Ordering::Relaxed);
+                continue;
+            }
             QueueItem::Data(audio) => {
                 if audio.mode != crate::messages::VadMode::Final {
                     // Progressive mode reserved for future live captions.
@@ -36,7 +40,8 @@ pub async fn run_stt(
                     Ok(text) => {
                         let text = text.trim().to_string();
                         if text.is_empty() {
-                            warn!("STT returned empty transcript — skipping turn");
+                            warn!("STT returned empty transcript — reopening mic");
+                            should_listen.store(true, std::sync::atomic::Ordering::Relaxed);
                             continue;
                         }
                         info!("STT: \"{text}\"");
@@ -56,6 +61,8 @@ pub async fn run_stt(
                     }
                     Err(e) => {
                         error!("STT failed: {e:#}");
+                        // Don't leave the pipeline half-deaf after a backend outage.
+                        should_listen.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
             }
