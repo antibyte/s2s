@@ -4,7 +4,8 @@
 #
 #   ghcr.io/<owner>/s2s-vulkan:latest
 
-ARG RUST_VERSION=1.85
+# icu_* / idna (via reqwest/url) need rustc >= 1.86; keep a recent stable.
+ARG RUST_VERSION=1.90
 ARG APP_VERSION=0.1.0
 
 # ── build ────────────────────────────────────────────────────────────
@@ -14,13 +15,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config libasound2-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Cache dependency builds with a stub main (invalidated only when lock/toml change).
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir -p src && echo 'fn main() {}' > src/main.rs \
+RUN mkdir -p src \
+    && printf 'fn main() {}\n' > src/main.rs \
     && cargo build --release \
-    && rm -rf src target/release/deps/s2s_vulkan* target/release/s2s-vulkan* target/release/.fingerprint/s2s-vulkan*
+    && rm -rf src \
+    && rm -f target/release/s2s-vulkan target/release/s2s-vulkan.d \
+    && rm -rf target/release/deps/s2s_vulkan-* target/release/.fingerprint/s2s-vulkan-*
 
 COPY src ./src
-RUN touch src/main.rs && cargo build --release \
+RUN cargo build --release \
     && strip target/release/s2s-vulkan
 
 # ── runtime ──────────────────────────────────────────────────────────
