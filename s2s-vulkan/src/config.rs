@@ -25,8 +25,12 @@ pub enum VadBackend {
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
 pub enum TtsBackend {
-    /// HTTP TTS server (e.g. a thin wrapper around qwentts.cpp / piper).
+    /// Prefer Supertonic if models present, else system/piper.
     #[default]
+    Auto,
+    /// In-process Supertonic 3 (ONNX Runtime, CPU — not GGML/Vulkan).
+    Supertonic,
+    /// HTTP TTS (OpenAI-style or qwentts/supertonic serve).
     Http,
     /// Local Piper binary (`piper` on PATH or --piper_bin).
     Piper,
@@ -122,7 +126,8 @@ pub struct Config {
     pub llm_stream: bool,
 
     // ── TTS ──────────────────────────────────────────────────────────
-    #[arg(long, value_enum, default_value_t = TtsBackend::Http)]
+    /// TTS engine: auto | supertonic | http | piper | system
+    #[arg(long, value_enum, default_value_t = TtsBackend::Auto, env = "S2S_TTS")]
     pub tts: TtsBackend,
 
     /// HTTP TTS endpoint. Expected: POST JSON {text, language?} → WAV or raw PCM.
@@ -140,8 +145,32 @@ pub struct Config {
     #[arg(long, default_value = None)]
     pub piper_model: Option<PathBuf>,
 
-    /// TTS output sample rate (used when synthesizing / resampling for playback).
-    #[arg(long, default_value_t = 24000)]
+    /// Directory containing Supertonic ONNX assets (`duration_predictor.onnx`, …).
+    #[arg(long, default_value = None, env = "S2S_SUPERTONIC_MODEL_DIR")]
+    pub supertonic_model_dir: Option<PathBuf>,
+
+    /// Preset voice name (e.g. M1, F1) or path to style JSON.
+    #[arg(long, default_value = "M1", env = "S2S_SUPERTONIC_VOICE")]
+    pub supertonic_voice: String,
+
+    /// Explicit path to a voice style JSON (overrides --supertonic-voice lookup).
+    #[arg(long, default_value = None)]
+    pub supertonic_voice_path: Option<PathBuf>,
+
+    /// Denoising steps (quality vs speed; 5–12 typical, default 8).
+    #[arg(long, default_value_t = 8)]
+    pub supertonic_steps: usize,
+
+    /// Speech speed factor (0.7–2.0).
+    #[arg(long, default_value_t = 1.05)]
+    pub supertonic_speed: f32,
+
+    /// Intra-op threads for ONNX (0 = runtime default).
+    #[arg(long, default_value_t = 0)]
+    pub supertonic_threads: usize,
+
+    /// TTS output sample rate after synthesis (Supertonic native 44100; web UI often 16000).
+    #[arg(long, default_value_t = 16000)]
     pub tts_sample_rate: u32,
 
     // ── Audio / IO ───────────────────────────────────────────────────

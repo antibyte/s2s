@@ -1,26 +1,57 @@
-//! Text-to-speech backends: HTTP (qwentts wrapper / OpenAI-style), Piper, system.
+//! Text-to-speech backends: Supertonic (ONNX/CPU), HTTP, Piper, system.
+//!
+//! Supertonic is in-process Rust + ONNX Runtime (not GGML/Vulkan).
+//! Qwen3 Vulkan remains available via `--tts http` / external qwentts server.
+
+mod supertonic;
+#[allow(dead_code, unused_imports, clippy::all)]
+mod supertonic_helper;
 
 use crate::audio::pcm::{decode_wav, f32_to_i16, resample_f32};
 use crate::config::{Config, TtsBackend};
 use crate::messages::{AudioOut, Control, LlmChunk, QueueItem};
 use anyhow::{anyhow, Context, Result};
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
+use supertonic::SupertonicEngine;
+
 pub async fn run_tts(
-    cfg: Config,
+    mut cfg: Config,
     mut llm_in: mpsc::Receiver<QueueItem<LlmChunk>>,
     audio_out: mpsc::Sender<AudioOut>,
-    should_listen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    should_listen: Arc<std::sync::atomic::AtomicBool>,
 ) {
+    let resolved = resolve_tts_backend(&cfg);
+    if resolved != cfg.tts {
+        info!("TTS auto-selected backend: {:?} → {:?}", cfg.tts, resolved);
+        cfg.tts = resolved;
+    }
     info!("TTS handler started (backend={:?})", cfg.tts);
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .expect("http client");
+
+    // Load Supertonic once; share across requests via Mutex inside the engine.
+    let supertonic: Option<Arc<SupertonicEngine>> = if matches!(cfg.tts, TtsBackend::Supertonic) {
+        match SupertonicEngine::load(&cfg) {
+            Ok(e) => Some(Arc::new(e)),
+            Err(e) => {
+                error!("Supertonic load failed: {e:#}");
+                warn!("Falling back to system TTS");
+                cfg.tts = TtsBackend::System;
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     while let Some(item) = llm_in.recv().await {
         match item {
@@ -39,7 +70,6 @@ pub async fn run_tts(
                             response_done: true,
                         })
                         .await;
-                    // Re-open mic after full response.
                     should_listen.store(true, std::sync::atomic::Ordering::Relaxed);
                     info!("TTS: response done — listening again");
                     continue;
@@ -47,7 +77,17 @@ pub async fn run_tts(
                 if chunk.text.trim().is_empty() {
                     continue;
                 }
-                match synthesize(&client, &cfg, &chunk.text, chunk.language.as_deref()).await {
+
+                let synth = synthesize(
+                    &client,
+                    &cfg,
+                    supertonic.as_ref(),
+                    &chunk.text,
+                    chunk.language.as_deref(),
+                )
+                .await;
+
+                match synth {
                     Ok((pcm, sr)) => {
                         info!(
                             "TTS: {} samples @ {} Hz for \"{}\"",
@@ -68,16 +108,37 @@ pub async fn run_tts(
                             break;
                         }
                     }
-                    Err(e) => error!("TTS failed: {e:#}"),
+                    Err(e) => {
+                        error!("TTS failed: {e:#}");
+                        should_listen.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
             }
         }
     }
 }
 
+/// Pick concrete backend for `--tts auto`.
+pub fn resolve_tts_backend(cfg: &Config) -> TtsBackend {
+    match cfg.tts {
+        TtsBackend::Auto => {
+            if supertonic::is_available(cfg) {
+                TtsBackend::Supertonic
+            } else if cfg.piper_model.is_some() {
+                TtsBackend::Piper
+            } else {
+                // Prefer HTTP if a local TTS server is configured, else system.
+                TtsBackend::System
+            }
+        }
+        other => other,
+    }
+}
+
 async fn synthesize(
     client: &reqwest::Client,
     cfg: &Config,
+    supertonic: Option<&Arc<SupertonicEngine>>,
     text: &str,
     language: Option<&str>,
 ) -> Result<(Vec<i16>, u32)> {
@@ -85,12 +146,22 @@ async fn synthesize(
         TtsBackend::Http => synthesize_http(client, cfg, text, language).await,
         TtsBackend::Piper => synthesize_piper(cfg, text).await,
         TtsBackend::System => synthesize_system(cfg, text).await,
+        TtsBackend::Supertonic => {
+            let eng = supertonic
+                .ok_or_else(|| anyhow!("Supertonic engine not loaded"))?
+                .clone();
+            let text = text.to_string();
+            let language = language.map(|s| s.to_string());
+            tokio::task::spawn_blocking(move || {
+                eng.synthesize_blocking(&text, language.as_deref())
+            })
+            .await
+            .map_err(|e| anyhow!("supertonic join: {e}"))?
+        }
+        TtsBackend::Auto => unreachable!("auto resolved before synthesize"),
     }
 }
 
-/// Flexible HTTP TTS:
-/// 1) OpenAI-style: POST {model, input, voice} → audio bytes (mp3/wav)
-/// 2) Simple: POST {text, language} → wav
 async fn synthesize_http(
     client: &reqwest::Client,
     cfg: &Config,
@@ -103,7 +174,7 @@ async fn synthesize_http(
         "input": text,
         "text": text,
         "language": language.unwrap_or("en"),
-        "voice": "default",
+        "voice": cfg.supertonic_voice,
         "response_format": "wav",
     });
 
@@ -154,7 +225,6 @@ async fn synthesize_piper(cfg: &Config, text: &str) -> Result<(Vec<i16>, u32)> {
         ));
     }
 
-    // Piper --output_raw is usually s16le mono at voice native rate (often 22050).
     let mut pcm = Vec::with_capacity(output.stdout.len() / 2);
     for c in output.stdout.chunks_exact(2) {
         pcm.push(i16::from_le_bytes([c[0], c[1]]));
@@ -162,10 +232,8 @@ async fn synthesize_piper(cfg: &Config, text: &str) -> Result<(Vec<i16>, u32)> {
     Ok((pcm, 22050))
 }
 
-/// Best-effort system TTS for bring-up without neural models.
 #[cfg(windows)]
 async fn synthesize_system(cfg: &Config, text: &str) -> Result<(Vec<i16>, u32)> {
-    // PowerShell SAPI → temporary WAV.
     let dir = std::env::temp_dir();
     let wav_path = dir.join(format!("s2s_tts_{}.wav", uuid::Uuid::new_v4()));
     let wav_str = wav_path.to_string_lossy().replace('\'', "''");
@@ -207,12 +275,11 @@ $s.Dispose()
 
 #[cfg(not(windows))]
 async fn synthesize_system(cfg: &Config, text: &str) -> Result<(Vec<i16>, u32)> {
-    // espeak-ng → wav stdout
     let output = Command::new("espeak-ng")
         .args(["-v", "en", "--stdout", text])
         .output()
         .await
-        .context("espeak-ng (install espeak-ng or use --tts http/piper)")?;
+        .context("espeak-ng (install espeak-ng or use --tts http/piper/supertonic)")?;
     if !output.status.success() {
         return Err(anyhow!(
             "espeak-ng failed: {}",
@@ -234,7 +301,6 @@ fn pcm_from_audio_bytes(bytes: &[u8], fallback_sr: u32) -> Result<(Vec<i16>, u32
         let (f32s, sr) = decode_wav(bytes)?;
         return Ok((f32_to_i16(&f32s), sr));
     }
-    // Assume raw s16le mono.
     if bytes.len() % 2 != 0 {
         return Err(anyhow!("odd-length raw PCM from TTS"));
     }
@@ -247,7 +313,8 @@ fn pcm_from_audio_bytes(bytes: &[u8], fallback_sr: u32) -> Result<(Vec<i16>, u32
 }
 
 pub async fn health_check(cfg: &Config) -> bool {
-    match cfg.tts {
+    let backend = resolve_tts_backend(cfg);
+    match backend {
         TtsBackend::Http => {
             let client = match reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(2))
@@ -256,13 +323,9 @@ pub async fn health_check(cfg: &Config) -> bool {
                 Ok(c) => c,
                 Err(_) => return false,
             };
-            // HEAD or GET may 404; connection success is enough signal for optional TTS.
             match client.get(&cfg.tts_url).send().await {
                 Ok(_) => true,
-                Err(e) => {
-                    // Connection refused → down; other errors might still work for POST.
-                    !e.is_connect()
-                }
+                Err(e) => !e.is_connect(),
             }
         }
         TtsBackend::Piper => cfg.piper_bin.exists() || which_ok("piper"),
@@ -276,6 +339,8 @@ pub async fn health_check(cfg: &Config) -> bool {
                 which_ok("espeak-ng")
             }
         }
+        TtsBackend::Supertonic => supertonic::is_available(cfg),
+        TtsBackend::Auto => true,
     }
 }
 

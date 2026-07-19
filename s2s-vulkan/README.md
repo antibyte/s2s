@@ -198,6 +198,38 @@ Turn taking: after VAD emits a final segment, listening pauses until TTS signals
 - Silero ONNX VAD (energy VAD is enough for PTT / quiet rooms)  
 - Progressive live captions during speech  
 
+## TTS backends
+
+| `--tts` | Engine | GPU |
+|--------|--------|-----|
+| `auto` (default) | Supertonic if models present, else system | — |
+| `supertonic` | **In-process** Supertonic 3 (ONNX Runtime **CPU**) | not Vulkan |
+| `http` | External server (Qwen3/qwentts Vulkan, `supertonic serve`, …) | depends on server |
+| `piper` | Piper CLI | CPU |
+| `system` | Windows SAPI / espeak-ng | CPU |
+
+### Supertonic (recommended CPU quality)
+
+```bash
+# one-time model download (~ONNX assets + voice styles)
+python scripts/download_supertonic.py
+# → models/supertonic/onnx + models/supertonic/voice_styles
+
+cargo run --release -- \
+  --mode websocket --host 0.0.0.0 --port 8765 \
+  --tts supertonic \
+  --supertonic-model-dir models/supertonic/onnx \
+  --supertonic-voice M1 \
+  --supertonic-steps 8 \
+  --tts-sample-rate 16000
+```
+
+Supertonic is **not** accelerated via `GGML_BACKEND=Vulkan0`. That flag still applies to whisper/llama/qwentts. Supertonic uses ONNX on CPU by design (official Rust: GPU not supported yet).
+
+### Qwen3-TTS (Vulkan quality path)
+
+Keep using `--tts http` against a Vulkan-built `qwentts` / `tts_qwen_server.py` server when you want the GGML Vulkan path.
+
 ## Web test UI (`web/`)
 
 Optional browser lab for the raw PCM WebSocket backend:

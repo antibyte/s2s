@@ -36,6 +36,16 @@ tower-http = { version = "0.6", features = ["cors"] }
 rubato = "0.16"
 byteorder = "1"
 
+# Supertonic 3 (ONNX Runtime CPU) — not GGML/Vulkan
+# ndarray 0.17 must match ort's dependency (avoid dual ndarray versions).
+ort = { version = "2.0.0-rc.12", features = ["download-binaries", "ndarray"] }
+ndarray = { version = "0.17", features = ["rayon"] }
+rand = "0.8"
+rand_distr = "0.4"
+rayon = "1.10"
+unicode-normalization = "0.1"
+regex = "1.10"
+
 [profile.release]
 lto = true
 codegen-units = 1

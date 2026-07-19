@@ -145,6 +145,8 @@ fn print_banner(cfg: &Config, gpu: &gpu::GpuReport) {
         "TTS  {:?}  {}",
         cfg.tts,
         match cfg.tts {
+            TtsBackend::Auto => "auto (supertonic→system)",
+            TtsBackend::Supertonic => "supertonic-onnx-cpu",
             TtsBackend::Http => cfg.tts_url.as_str(),
             TtsBackend::Piper => "piper",
             TtsBackend::System => "system",
