@@ -1,0 +1,143 @@
+# Intel Arc / oneAPI SYCL overlay for Linux hosts.
+# Usage:
+#   docker compose -f docker-compose.yml -f docker/docker-compose.intel-sycl.yml --profile tts up -d --build
+#
+# Requires host Intel GPU + /dev/dri. Not for Windows Docker Desktop + Arc.
+
+services:
+  s2s:
+    environment:
+      S2S_GPU: ${S2S_GPU:-auto}
+      GGML_BACKEND: ${GGML_BACKEND:-}
+      S2S_LAB_GPU_VENDOR: intel
+      S2S_LAB_DEVICE_NAME: ${S2S_LAB_DEVICE_NAME:-}
+      S2S_LAB_ACCELERATORS: sycl,vulkan,cpu
+      S2S_ALLOW_EXPERIMENTAL: "true"
+      # Prefer SYCL when toolkit/runtime is present in related services
+      S2S_TTS_URL: ${S2S_TTS_URL:-http://tts-qwen-sycl-aot:8083/v1/audio/speech}
+      S2S_TTS: ${S2S_TTS:-http}
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+
+  parakeet-xpu:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.parakeet
+      args:
+        TORCH_VERSION: ${PARAKEET_TORCH_VERSION:-2.11.0}
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/xpu
+    image: ${PARAKEET_XPU_IMAGE:-s2s-asr-parakeet:xpu}
+    container_name: s2s-parakeet-xpu
+    profiles: ["managed"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: asr
+      backend-id: parakeet-tdt-0.6b-v3
+    environment:
+      PARAKEET_MODEL_DIR: /models/parakeet-tdt-0.6b-v3
+      PARAKEET_DEVICE: xpu
+      PARAKEET_DTYPE: bfloat16
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - models:/models
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+    networks:
+      s2s:
+        aliases:
+          - parakeet-xpu
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 300s
+
+  tts:
+    build:
+      # When invoked as:
+      #   docker compose -f docker-compose.yml -f docker/docker-compose.intel-sycl.yml
+      # paths are relative to this file's directory (docker/).
+      context: ..
+      dockerfile: Dockerfile.tts-sycl
+      args:
+        SYCL_DEVICE_ARCH: bmg_g21
+    image: ${TTS_IMAGE:-s2s-tts-qwen-sycl:b580}
+    container_name: s2s-tts-qwen-sycl-aot
+    environment:
+      S2S_GPU: sycl
+      GGML_BACKEND: SYCL0
+      ONEAPI_DEVICE_SELECTOR: level_zero:gpu
+      GGML_SYCL_ENABLE_FLASH_ATTN: "1"
+      GGML_SYCL_DISABLE_GRAPH: "1"
+      GGML_SYCL_PRIORITIZE_DMMV: "1"
+      GGML_SYCL_DEV2DEV_MEMCPY: "0"
+      GGML_SYCL_DISABLE_OPT: "0"
+      GGML_SYCL_DISABLE_DNN: "0"
+      GGML_SYCL_USE_LEVEL_ZERO_API: "1"
+      QWEN_CODE_SAMPLER: ${QWEN_CODE_SAMPLER:-host}
+      QWEN_TALKER: /models/qwen/qwen-talker-0.6b-customvoice-Q4_K_M.gguf
+      QWEN_CODEC: /models/qwen/qwen-tokenizer-12hz-Q8_0.gguf
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+    networks:
+      s2s:
+        aliases:
+          - tts-qwen-sycl-aot
+
+  tts-sycl-jit:
+    build:
+      context: ..
+      dockerfile: Dockerfile.tts-sycl
+      args:
+        SYCL_DEVICE_ARCH: ""
+    image: ${TTS_SYCL_JIT_IMAGE:-s2s-tts-qwen-sycl:portable}
+    container_name: s2s-tts-qwen-sycl-jit
+    profiles: ["managed"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: tts
+      backend-id: qwen3-tts-0.6b
+    environment:
+      S2S_GPU: sycl
+      GGML_BACKEND: SYCL0
+      ONEAPI_DEVICE_SELECTOR: level_zero:gpu
+      GGML_SYCL_ENABLE_FLASH_ATTN: "1"
+      GGML_SYCL_DISABLE_GRAPH: "1"
+      GGML_SYCL_PRIORITIZE_DMMV: "1"
+      GGML_SYCL_DEV2DEV_MEMCPY: "0"
+      GGML_SYCL_DISABLE_OPT: "0"
+      GGML_SYCL_DISABLE_DNN: "0"
+      GGML_SYCL_USE_LEVEL_ZERO_API: "1"
+      QWEN_CODE_SAMPLER: ${QWEN_CODE_SAMPLER:-host}
+      QWEN_TALKER: /models/qwen/qwen-talker-0.6b-customvoice-Q4_K_M.gguf
+      QWEN_CODEC: /models/qwen/qwen-tokenizer-12hz-Q8_0.gguf
+    volumes:
+      - models:/models
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+    networks:
+      s2s:
+        aliases:
+          - tts-qwen-sycl-jit
+    restart: unless-stopped

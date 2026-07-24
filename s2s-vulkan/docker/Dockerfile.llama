@@ -1,0 +1,13 @@
+# syntax=docker/dockerfile:1.7
+
+# The startup LLM is immutable in this image, so a fresh lab never has to
+# download 1.5 GB into the user model volume before it can answer.
+ARG LLAMA_BASE_IMAGE=ghcr.io/ggml-org/llama.cpp:server
+FROM ${LLAMA_BASE_IMAGE}
+
+ADD --checksum=sha256:a6cb86162792af1fc7886dc1f31e57a7cf9e0866c660d7c3d44be5173776818d \
+    https://huggingface.co/Edge-Quant/granite-3.3-2b-instruct-Q4_K_M-GGUF/resolve/57f080a9a63847f2dddc227d3514ecfd9257c1c9/granite-3.3-2b-instruct-q4_k_m.gguf?download=true \
+    /opt/s2s-models/granite-3.3-2b-instruct-q4_k_m.gguf
+
+LABEL s2s.lab.bundled-model="granite-3.3-2b-instruct-q4_k_m" \
+      s2s.lab.bundled-bytes="1545303328"

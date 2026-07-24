@@ -1,0 +1,597 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index df33706..08e9ea0 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -113,7 +113,18 @@ macro(link_ggml_backends target)
+ 
+     # SYCL links its runtime PRIVATE, consumers need -fsycl to resolve libsycl.so
+     if(TARGET ggml-sycl AND GGML_SYCL)
++        target_compile_definitions(${target} PRIVATE QWEN_HAS_SYCL_SAMPLER=1)
+         target_link_options(${target} PRIVATE -fsycl)
++        # ggml-sycl is a static library. Its PRIVATE IntelSYCL dependency is not
++        # propagated to final executables on Windows, so explicitly retain
++        # sycl8.lib and the matching compiler/link flags at the consuming target.
++        if(TARGET IntelSYCL::SYCL_CXX)
++            target_link_libraries(${target} PRIVATE IntelSYCL::SYCL_CXX)
++        elseif(WIN32 AND SYCL_LIBRARY)
++            # IntelSYCL::SYCL_CXX is directory-scoped in oneAPI 2025.1 and is
++            # therefore not visible from this parent CMakeLists.
++            target_link_libraries(${target} PRIVATE "${SYCL_LIBRARY}")
++        endif()
+     endif()
+     add_dependencies(${target} version)
+ endmacro()
+diff --git a/src/code-predictor-forward.h b/src/code-predictor-forward.h
+index 70871ec..9472ecb 100644
+--- a/src/code-predictor-forward.h
++++ b/src/code-predictor-forward.h
+@@ -42,6 +42,9 @@
+ #include "kv-cache.h"
+ #include "qt-error.h"
+ #include "sampling.h"
++#if defined(QWEN_HAS_SYCL_SAMPLER)
++#    include "ggml-sycl.h"
++#endif
+ 
+ #include <cmath>
+ #include <cstdint>
+@@ -337,6 +340,46 @@ static bool code_predictor_replay(CodePredGraph *      cp,
+     return true;
+ }
+ 
++static bool code_predictor_replay_sycl(CodePredGraph * cp,
++                                       ggml_backend_t  backend,
++                                       int32_t         code_id,
++                                       bool            upload_code_id,
++                                       float           temperature,
++                                       int             top_k,
++                                       float           top_p,
++                                       int64_t         seed,
++                                       int64_t         subsequence,
++                                       struct ggml_tensor * next_token,
++                                       struct ggml_tensor * sampled_tokens,
++                                       int                  sampled_index) {
++#if defined(QWEN_HAS_SYCL_SAMPLER)
++    if (upload_code_id) {
++        ggml_backend_tensor_set(cp->ids_in, &code_id, 0, sizeof(int32_t));
++    }
++    if (ggml_backend_graph_compute(backend, cp->gf) != GGML_STATUS_SUCCESS) {
++        fprintf(stderr, "[CodePredictor] FATAL: SYCL graph compute failed\n");
++        return false;
++    }
++    return ggml_backend_sycl_sample_top_k_p(backend, cp->logits, temperature, top_k, top_p, seed, subsequence,
++                                             next_token, sampled_tokens, sampled_index);
++#else
++    (void) cp;
++    (void) backend;
++    (void) code_id;
++    (void) upload_code_id;
++    (void) temperature;
++    (void) top_k;
++    (void) top_p;
++    (void) seed;
++    (void) subsequence;
++    (void) next_token;
++    (void) sampled_tokens;
++    (void) sampled_index;
++    fprintf(stderr, "[CodePredictor] FATAL: this build has no SYCL sampler\n");
++    return false;
++#endif
++}
++
+ // Run the predictor for one audio frame over the static graphs. The
+ // prefill replay consumes the persistent hidden bridge already written
+ // by the talker graph and the sampled c0; the 14 step replays each
+@@ -355,6 +398,8 @@ static bool code_predictor_step(const CodePredictorWeights * cw,
+                                 float                        top_p,
+                                 int64_t                      seed,
+                                 int64_t                      subseq_base,
++                                enum qt_code_sampler         sampler,
++                                struct ggml_tensor *         device_tokens,
+                                 const char *                 dump_dir,
+                                 CodePredictorOutput *        out) {
+     const int n_acoustic = cw->num_acoustic_codebooks;
+@@ -362,11 +407,27 @@ static bool code_predictor_step(const CodePredictorWeights * cw,
+     out->codes.assign((size_t) (n_acoustic + 1), 0);
+     out->codes[0] = c0;
+ 
+-    std::vector<float> logits;
+-    if (!code_predictor_replay(prefill_graph, backend, c0, &logits)) {
+-        return false;
+-    }
+-    {
++    if (sampler == QT_CODE_SAMPLER_SYCL) {
++        ggml_backend_tensor_set(device_tokens, &c0, 0, sizeof(int32_t));
++        struct ggml_tensor * next = n_acoustic > 1 ? step_graphs[0].ids_in : NULL;
++        if (!code_predictor_replay_sycl(prefill_graph, backend, c0, true, temperature, top_k, top_p, seed,
++                                        subseq_base + 1, next, device_tokens, 1)) {
++            return false;
++        }
++        for (int g = 1; g < n_acoustic; g++) {
++            next = g < n_acoustic - 1 ? step_graphs[(size_t) g].ids_in : NULL;
++            if (!code_predictor_replay_sycl(&step_graphs[(size_t) (g - 1)], backend, 0, false, temperature, top_k,
++                                            top_p, seed, subseq_base + 1 + g, next, device_tokens, g + 1)) {
++                return false;
++            }
++        }
++        ggml_backend_tensor_get(device_tokens, out->codes.data(), 0,
++                                (size_t) (n_acoustic + 1) * sizeof(int32_t));
++    } else {
++        std::vector<float> logits;
++        if (!code_predictor_replay(prefill_graph, backend, c0, &logits)) {
++            return false;
++        }
+         float u_g = 0.0f;
+         int   cg = sample_top_k_p(logits.data(), (int) logits.size(), temperature, top_k, top_p, 1.0f, nullptr, 0, seed,
+                                   subseq_base + 1, &u_g);
+@@ -375,23 +436,22 @@ static bool code_predictor_step(const CodePredictorWeights * cw,
+             return false;
+         }
+         out->codes[1] = cg;
+-    }
+ 
+-    // Decode loop: 14 single-token replays. At step g (g=1..14) we feed
+-    // the id of the code we just sampled, gathered in graph from the
+-    // group's private embedding table, and read lm_head[g].
+-    for (int g = 1; g < n_acoustic; g++) {
+-        if (!code_predictor_replay(&step_graphs[(size_t) (g - 1)], backend, out->codes[(size_t) g], &logits)) {
+-            return false;
+-        }
+-        float u_g = 0.0f;
+-        int   cg = sample_top_k_p(logits.data(), (int) logits.size(), temperature, top_k, top_p, 1.0f, nullptr, 0, seed,
+-                                  subseq_base + 1 + g, &u_g);
+-        if (cg < 0) {
+-            fprintf(stderr, "[CodePredictor] FATAL: sample returned no candidate at g=%d\n", g);
+-            return false;
++        // Reference path: 14 single-token replays with full logit
++        // readbacks. Kept byte-for-byte unchanged for ABI v1/v2/HOST.
++        for (int g = 1; g < n_acoustic; g++) {
++            if (!code_predictor_replay(&step_graphs[(size_t) (g - 1)], backend, out->codes[(size_t) g], &logits)) {
++                return false;
++            }
++            u_g = 0.0f;
++            cg = sample_top_k_p(logits.data(), (int) logits.size(), temperature, top_k, top_p, 1.0f, nullptr, 0, seed,
++                                subseq_base + 1 + g, &u_g);
++            if (cg < 0) {
++                fprintf(stderr, "[CodePredictor] FATAL: sample returned no candidate at g=%d\n", g);
++                return false;
++            }
++            out->codes[(size_t) (g + 1)] = cg;
+         }
+-        out->codes[(size_t) (g + 1)] = cg;
+     }
+ 
+     if (dump_dir) {
+diff --git a/src/pipeline-tts.cpp b/src/pipeline-tts.cpp
+index 252dbcb..91e253c 100644
+--- a/src/pipeline-tts.cpp
++++ b/src/pipeline-tts.cpp
+@@ -118,6 +118,7 @@ bool pipeline_tts_load(PipelineTTS * pt,
+     pt->bridge_ctx          = NULL;
+     pt->bridge_buf          = NULL;
+     pt->hidden_bridge       = NULL;
++    pt->code_sampler_tokens = NULL;
+ 
+     // Fused flash attention needs a GPU kernel; CPU only backends fall
+     // back to the F32 manual chain automatically. clamp_fp16 is forwarded
+@@ -232,21 +233,25 @@ bool pipeline_tts_load(PipelineTTS * pt,
+     // predictor prefill graph. Cleared once so debug dumps never see
+     // stale bytes before the first talker forward.
+     {
+-        struct ggml_init_params gp = { ggml_tensor_overhead() * 2, NULL, true };
++        struct ggml_init_params gp = { ggml_tensor_overhead() * 3, NULL, true };
+         pt->bridge_ctx             = ggml_init(gp);
+         pt->hidden_bridge =
+             pt->bridge_ctx ? ggml_new_tensor_1d(pt->bridge_ctx, GGML_TYPE_F32, pt->talker.hidden_size) : NULL;
++        pt->code_sampler_tokens =
++            pt->bridge_ctx ? ggml_new_tensor_1d(pt->bridge_ctx, GGML_TYPE_I32, pt->num_code_groups) : NULL;
+         if (pt->hidden_bridge) {
+             ggml_set_name(pt->hidden_bridge, "talker_hidden_bridge");
++            ggml_set_name(pt->code_sampler_tokens, "code_sampler_tokens");
+             pt->bridge_buf = ggml_backend_alloc_ctx_tensors(pt->bridge_ctx, pt->backend);
+         }
+-        if (!pt->hidden_bridge || !pt->bridge_buf) {
++        if (!pt->hidden_bridge || !pt->code_sampler_tokens || !pt->bridge_buf) {
+             qt_log(QT_LOG_ERROR, "[Pipeline] hidden bridge allocation failed");
+             if (pt->bridge_ctx) {
+                 ggml_free(pt->bridge_ctx);
+                 pt->bridge_ctx = NULL;
+             }
+             pt->hidden_bridge = NULL;
++            pt->code_sampler_tokens = NULL;
+             kv_cache_free(&pt->code_predictor_kv);
+             kv_cache_free(&pt->talker_kv);
+             ggml_backend_sched_free(pt->sched);
+@@ -288,6 +293,7 @@ bool pipeline_tts_load(PipelineTTS * pt,
+         ggml_free(pt->bridge_ctx);
+         pt->bridge_ctx    = NULL;
+         pt->hidden_bridge = NULL;
++        pt->code_sampler_tokens = NULL;
+         kv_cache_free(&pt->code_predictor_kv);
+         kv_cache_free(&pt->talker_kv);
+         ggml_backend_sched_free(pt->sched);
+@@ -328,6 +334,7 @@ void pipeline_tts_free(PipelineTTS * pt) {
+         pt->bridge_ctx = NULL;
+     }
+     pt->hidden_bridge = NULL;
++    pt->code_sampler_tokens = NULL;
+     kv_cache_free(&pt->code_predictor_kv);
+     kv_cache_free(&pt->talker_kv);
+     if (pt->sched) {
+@@ -616,6 +623,36 @@ qt_status pipeline_tts_synthesize(PipelineTTS *                pt,
+     const float talker_T      = params->do_sample ? params->temperature : 0.0f;
+     const float subtk_T       = params->subtalker_do_sample ? params->subtalker_temperature : 0.0f;
+     const float talker_rp     = params->repetition_penalty;
++    const int requested_sampler =
++        params->abi_version >= 3 ? params->code_sampler : (int) QT_CODE_SAMPLER_HOST;
++    if (requested_sampler < (int) QT_CODE_SAMPLER_HOST ||
++        requested_sampler > (int) QT_CODE_SAMPLER_AUTO) {
++        qt_set_error("pipeline_tts_synthesize: invalid code_sampler %d", requested_sampler);
++        return QT_STATUS_INVALID_PARAMS;
++    }
++    // AUTO remains the exact host reference until device promotion gates
++    // are met for a registered hardware/image combination.
++    const enum qt_code_sampler code_sampler =
++        requested_sampler == (int) QT_CODE_SAMPLER_SYCL ? QT_CODE_SAMPLER_SYCL : QT_CODE_SAMPLER_HOST;
++    if (code_sampler == QT_CODE_SAMPLER_SYCL) {
++#if defined(QWEN_HAS_SYCL_SAMPLER)
++        if (!ggml_backend_is_sycl(pt->backend)) {
++            qt_set_error("pipeline_tts_synthesize: code_sampler=sycl requires a SYCL backend");
++            return QT_STATUS_INVALID_PARAMS;
++        }
++        if (params->subtalker_top_k < 1 || params->subtalker_top_k > 256) {
++            qt_set_error("pipeline_tts_synthesize: SYCL sampler requires subtalker_top_k in 1..256");
++            return QT_STATUS_INVALID_PARAMS;
++        }
++        qt_log(QT_LOG_INFO, "[Pipeline] Code sampler: SYCL (experimental)");
++#else
++        qt_set_error("pipeline_tts_synthesize: code_sampler=sycl requested but this build has no SYCL sampler");
++        return QT_STATUS_INVALID_PARAMS;
++#endif
++    } else {
++        qt_log(QT_LOG_INFO, "[Pipeline] Code sampler: host%s",
++               requested_sampler == (int) QT_CODE_SAMPLER_AUTO ? " (auto policy)" : "");
++    }
+ 
+     // Codec decode framing. The buffered path routes through
+     // codec_chunked_decode with a rolling left context window mirroring
+@@ -646,6 +683,7 @@ qt_status pipeline_tts_synthesize(PipelineTTS *                pt,
+     // decode graph gathers and sums the 16 embeddings on device.
+     std::vector<int32_t> prev_ids((size_t) num_codebooks, 0);
+     const float *        prev_overlay = NULL;
++    bool                 reached_eos = false;
+ 
+     // Stateful streaming decoder: every generated frame decodes
+     // immediately through the persistent codec state and emits its
+@@ -735,6 +773,7 @@ qt_status pipeline_tts_synthesize(PipelineTTS *                pt,
+ 
+         if (c0 == codec_eos_id) {
+             qt_log(QT_LOG_INFO, "[Pipeline] EOS at step %d, stopping", step);
++            reached_eos = true;
+             break;
+         }
+ 
+@@ -743,7 +782,7 @@ qt_status pipeline_tts_synthesize(PipelineTTS *                pt,
+         Timer               t_pred;
+         if (!code_predictor_step(&pt->code_predictor, pt->backend, &pt->cp_prefill_graph, pt->cp_step_graphs.data(), c0,
+                                  subtk_T, params->subtalker_top_k, params->subtalker_top_p, resolved_seed,
+-                                 subseq_counter - 1, cp_dump, &cp)) {
++                                 subseq_counter - 1, code_sampler, pt->code_sampler_tokens, cp_dump, &cp)) {
+             return QT_STATUS_GENERATE_FAILED;
+         }
+         perf.predictor_ms += t_pred.ms();
+@@ -818,6 +857,11 @@ qt_status pipeline_tts_synthesize(PipelineTTS *                pt,
+ 
+     qt_log(QT_LOG_INFO, "[Pipeline] Generation done : %zu frames", all_codes.size());
+     perf.n_frames = (int) all_codes.size();
++    if (!reached_eos && (int) all_codes.size() >= params->max_new_tokens) {
++        qt_set_error("pipeline_tts_synthesize: EOS not reached before max_new_tokens=%d", params->max_new_tokens);
++        qt_log(QT_LOG_ERROR, "[Pipeline] EOS limit reached at %d frames; aborting request", params->max_new_tokens);
++        return QT_STATUS_GENERATE_FAILED;
++    }
+ 
+     if (params->dump_dir && !all_codes.empty()) {
+         DebugDumper d;
+diff --git a/src/pipeline-tts.h b/src/pipeline-tts.h
+index 8f4941d..ddd9d93 100644
+--- a/src/pipeline-tts.h
++++ b/src/pipeline-tts.h
+@@ -141,6 +141,7 @@ struct PipelineTTS {
+     struct ggml_context * bridge_ctx;
+     ggml_backend_buffer_t bridge_buf;
+     struct ggml_tensor *  hidden_bridge;
++    struct ggml_tensor *  code_sampler_tokens;
+ 
+     // Persistent graph arena for the talker prefill (T_ctx varies per
+     // request, rebuilt through the sched). The talker decode and the
+diff --git a/src/qwen.cpp b/src/qwen.cpp
+index 1fb45ff..b57f3dc 100644
+--- a/src/qwen.cpp
++++ b/src/qwen.cpp
+@@ -205,7 +205,7 @@ void qt_tts_default_params(struct qt_tts_params * p) {
+     p->ref_n_samples          = 0;
+     p->ref_text               = nullptr;
+     p->seed                   = -1;
+-    p->max_new_tokens         = 2048;
++    p->max_new_tokens         = 256;
+     p->do_sample              = true;
+     p->temperature            = 0.9f;
+     p->top_k                  = 50;
+@@ -226,6 +226,7 @@ void qt_tts_default_params(struct qt_tts_params * p) {
+     p->ref_spk_dim            = 0;
+     p->ref_codes              = nullptr;
+     p->ref_T                  = 0;
++    p->code_sampler           = QT_CODE_SAMPLER_HOST;
+ }
+ 
+ int qt_num_codebooks(const struct qt_context * q) {
+diff --git a/src/qwen.h b/src/qwen.h
+index 90f16b6..64b78e8 100644
+--- a/src/qwen.h
++++ b/src/qwen.h
+@@ -57,7 +57,7 @@ extern "C" {
+ // git short hash + commit date string returned by qt_version(); for
+ // binding compat checks, QT_ABI_VERSION is the only number that
+ // matters.
+-#define QT_ABI_VERSION 2
++#define QT_ABI_VERSION 3
+ 
+ // Returns a static string of the form "<git-hash> (<date>)" identifying
+ // the exact commit this binary was built from. Safe to call from any
+@@ -223,6 +223,16 @@ typedef void (*qt_log_cb)(enum qt_log_level level, const char * msg, void * user
+ // whisper_log_set / llama_log_set / ov_log_set.
+ QT_API void qt_log_set(qt_log_cb cb, void * user_data);
+ 
++// CodePredictor sampling backend. HOST is the byte-compatible reference
++// path. SYCL keeps the logits on an Intel GPU and only transfers selected
++// token ids. AUTO intentionally resolves to HOST until the promotion gates
++// are met on the target device.
++enum qt_code_sampler {
++    QT_CODE_SAMPLER_HOST = 0,
++    QT_CODE_SAMPLER_SYCL = 1,
++    QT_CODE_SAMPLER_AUTO = 2,
++};
++
+ // Synthesis parameters. Strings are NULL terminated UTF-8; NULL maps
+ // to empty where the underlying pipeline accepts it. The selection
+ // between base / custom_voice / voice_design synthesis mode is driven
+@@ -262,7 +272,7 @@ struct qt_tts_params {
+     // is forwarded verbatim for deterministic replay across runs.
+     // Defaults match the upstream Python reference: do_sample true,
+     // temperature 0.9, top_k 50, top_p 1.0, repetition_penalty 1.05,
+-    // subtalker mirrors talker, max_new_tokens 2048.
++    // subtalker mirrors talker, max_new_tokens 256.
+     int64_t seed;
+     int     max_new_tokens;
+     bool    do_sample;
+@@ -320,13 +330,17 @@ struct qt_tts_params {
+     int             ref_spk_dim;
+     const int32_t * ref_codes;
+     int             ref_T;
++
++    // ABI v3. Callers using ABI v1/v2 are always interpreted as HOST.
++    // Use one of qt_code_sampler. Unknown values are rejected.
++    int code_sampler;
+ };
+ 
+ // Initialise to the standard defaults. Strings NULL, seed -1,
+-// max_new_tokens 2048, do_sample true, temperature 0.9, top_k 50,
++// max_new_tokens 256, do_sample true, temperature 0.9, top_k 50,
+ // top_p 1.0, repetition_penalty 1.05, subtalker mirrors talker,
+ // dump_dir NULL, cancel NULL, on_chunk NULL, codec_chunk_sec 24.0,
+-// codec_left_context_sec 2.0.
++// codec_left_context_sec 2.0, code_sampler HOST.
+ QT_API void qt_tts_default_params(struct qt_tts_params * p);
+ 
+ // Number of RVQ codebooks (K) of the loaded codec. Pre-encoded ICL
+diff --git a/src/tts-server.h b/src/tts-server.h
+index 1b0bd5b..d4f625e 100644
+--- a/src/tts-server.h
++++ b/src/tts-server.h
+@@ -42,6 +42,10 @@ struct tts_request {
+     std::string voice;         // OAI voice, mapped to a speaker by the adapter
+     std::string instructions;  // OAI instructions, mapped to the ABI instruct field
+     std::string format;        // "pcm" (stream) or "wav" (one-shot)
++    // Optional per-request language (OAI "language" or qwentts "lang").
++    // Empty keeps the server CLI default. Values are upstream names
++    // ("german", "english", "auto", …) — not ISO codes.
++    std::string language;
+     float       speed;         // OAI speed, parsed then ignored (no time stretch in the ABI)
+ 
+     // Optional sampling overrides. -1 (ints) and NaN (floats) mark a
+@@ -169,6 +173,13 @@ static bool tts_parse_request(const std::string & body, tts_request & req, std::
+     yyjson_val * instructions = yyjson_obj_get(root, "instructions");
+     req.instructions          = yyjson_is_str(instructions) ? yyjson_get_str(instructions) : "";
+ 
++    // Prefer "language" (OpenAI-style); fall back to qwentts "lang".
++    yyjson_val * language = yyjson_obj_get(root, "language");
++    if (!yyjson_is_str(language)) {
++        language = yyjson_obj_get(root, "lang");
++    }
++    req.language = yyjson_is_str(language) ? yyjson_get_str(language) : "";
++
+     yyjson_val * fmt = yyjson_obj_get(root, "response_format");
+     req.format       = yyjson_is_str(fmt) ? yyjson_get_str(fmt) : "pcm";
+ 
+@@ -211,7 +222,7 @@ static bool tts_parse_request(const std::string & body, tts_request & req, std::
+ 
+     int64_t max_new = -1;
+     int64_t top_k   = -1;
+-    bool    ok = opt_int("seed", INT64_MIN, INT64_MAX, req.seed) && opt_int("max_new_tokens", 1, INT32_MAX, max_new) &&
++    bool    ok = opt_int("seed", INT64_MIN, INT64_MAX, req.seed) && opt_int("max_new_tokens", 1, 256, max_new) &&
+               opt_int("top_k", 0, INT32_MAX, top_k) && opt_num("temperature", 0.0, FLT_MAX, req.temperature) &&
+               opt_num("top_p", DBL_MIN, 1.0, req.top_p) &&
+               opt_num("repetition_penalty", DBL_MIN, FLT_MAX, req.repetition_penalty);
+diff --git a/tests/abi-c.c b/tests/abi-c.c
+index ac85f6c..978b20b 100644
+--- a/tests/abi-c.c
++++ b/tests/abi-c.c
+@@ -70,7 +70,8 @@ int main(void) {
+     /* Sanity-check a few default values, including the abi_version and
+      * the new use_fa / clamp_fp16 / on_chunk / codec_chunk_sec /
+      * codec_left_context_sec slots. */
+-    if (params.max_new_tokens != 2048 || params.codec_chunk_sec <= 0.0f || params.codec_left_context_sec < 0.0f) {
++    if (params.max_new_tokens != 256 || params.codec_chunk_sec <= 0.0f || params.codec_left_context_sec < 0.0f ||
++        params.code_sampler != QT_CODE_SAMPLER_HOST) {
+         fprintf(stderr, "[Probe] default values do not match\n");
+         return 1;
+     }
+diff --git a/tools/qwen-tts.cpp b/tools/qwen-tts.cpp
+index 1344b39..b40441b 100644
+--- a/tools/qwen-tts.cpp
++++ b/tools/qwen-tts.cpp
+@@ -52,7 +52,7 @@ static void print_usage(const char * prog) {
+             "  --ref-rvq <path>        Pre-encoded reference codes from qwen-codec (requires\n"
+             "                          --ref-spk and --ref-text, enables ICL clone mode)\n"
+             "  --ref-text <path>       Transcript file for the reference (enables ICL clone mode)\n"
+-            "  --max-new <n>           Max new audio frames (default: 2048)\n"
++            "  --max-new <n>           Max new audio frames (default: 256)\n"
+             "  --codec-chunk-dur <f>   Codec decode chunk duration in seconds (default: 24.0)\n"
+             "  --codec-left-dur <f>    Codec decode left context duration in seconds (default: 2.0)\n"
+             "  --stream-by-line        Flush synthesis at each newline, one WAV header per line (-o '-')\n\n"
+@@ -65,7 +65,8 @@ static void print_usage(const char * prog) {
+             "  --rep-pen <f>           Talker repetition penalty (default: 1.05)\n"
+             "  --sub-temp <f>          Sub-talker temperature (default: 0.9)\n"
+             "  --sub-top-k <n>         Sub-talker top-k (default: 50)\n"
+-            "  --sub-top-p <f>         Sub-talker top-p (default: 1.0)\n\n"
++            "  --sub-top-p <f>         Sub-talker top-p (default: 1.0)\n"
++            "  --code-sampler <name>   host, sycl, auto (default: QWEN_CODE_SAMPLER or host)\n\n"
+             "Debug:\n"
+             "  --no-fa                 Disable flash attention\n"
+             "  --clamp-fp16            Clamp hidden states to FP16 range\n"
+@@ -102,8 +103,22 @@ struct Args {
+     bool         stream_by_line;
+     float        codec_chunk_sec;
+     float        codec_left_context_sec;
++    int          code_sampler;
+ };
+ 
++static bool parse_code_sampler(const char * value, int * out) {
++    if (!value || !std::strcmp(value, "host")) {
++        *out = QT_CODE_SAMPLER_HOST;
++    } else if (!std::strcmp(value, "sycl")) {
++        *out = QT_CODE_SAMPLER_SYCL;
++    } else if (!std::strcmp(value, "auto")) {
++        *out = QT_CODE_SAMPLER_AUTO;
++    } else {
++        return false;
++    }
++    return true;
++}
++
+ // Read all of stdin into a string. Binary mode on Windows so UTF-16 input
+ // survives CRLF translation, then normalised to UTF-8. Trims trailing
+ // newlines so a piped text file behaves like clean utterance input.
+@@ -183,7 +198,7 @@ static bool parse_args(int argc, char ** argv, Args & a) {
+     a                        = {};
+     a.lang                   = "auto";
+     a.format                 = "wav16";
+-    a.max_new_tokens         = 2048;
++    a.max_new_tokens         = 256;
+     a.seed                   = -1;
+     a.do_sample              = true;
+     a.temperature            = 0.9f;
+@@ -199,6 +214,10 @@ static bool parse_args(int argc, char ** argv, Args & a) {
+     a.stream_by_line         = false;
+     a.codec_chunk_sec        = 24.0f;
+     a.codec_left_context_sec = 2.0f;
++    if (!parse_code_sampler(std::getenv("QWEN_CODE_SAMPLER"), &a.code_sampler)) {
++        fprintf(stderr, "[CLI] ERROR: QWEN_CODE_SAMPLER must be host, sycl, or auto\n");
++        return false;
++    }
+     for (int i = 1; i < argc; i++) {
+         const char * arg = argv[i];
+         if (std::strcmp(arg, "-h") == 0 || std::strcmp(arg, "--help") == 0) {
+@@ -252,6 +271,11 @@ static bool parse_args(int argc, char ** argv, Args & a) {
+             a.subtalker_top_k = std::atoi(argv[++i]);
+         } else if (std::strcmp(arg, "--sub-top-p") == 0 && i + 1 < argc) {
+             a.subtalker_top_p = (float) std::atof(argv[++i]);
++        } else if (std::strcmp(arg, "--code-sampler") == 0 && i + 1 < argc) {
++            if (!parse_code_sampler(argv[++i], &a.code_sampler)) {
++                fprintf(stderr, "[CLI] ERROR: --code-sampler must be host, sycl, or auto\n");
++                return false;
++            }
+         } else if (std::strcmp(arg, "--no-fa") == 0) {
+             a.use_fa = false;
+         } else if (std::strcmp(arg, "--clamp-fp16") == 0) {
+@@ -416,6 +440,7 @@ static int run(const Args & a) {
+     params.dump_dir               = a.dump_dir;
+     params.codec_chunk_sec        = a.codec_chunk_sec;
+     params.codec_left_context_sec = a.codec_left_context_sec;
++    params.code_sampler           = a.code_sampler;
+ 
+     if (stream_to_stdout) {
+         wav_stream ws = {};
+diff --git a/tools/tts-server.cpp b/tools/tts-server.cpp
+index a9af221..46386ed 100644
+--- a/tools/tts-server.cpp
++++ b/tools/tts-server.cpp
+@@ -46,11 +46,25 @@ static void print_usage(const char * prog) {
+             "  --host <ip>             Listen address (default: 127.0.0.1)\n"
+             "  --port <n>              Listen port (default: 8080)\n"
+             "  --lang <name>           Language label (default: auto)\n"
++            "  --code-sampler <name>   host, sycl, auto (default: QWEN_CODE_SAMPLER or host)\n"
+             "  --no-fa                 Disable flash attention\n"
+             "  --clamp-fp16            Clamp hidden states to FP16 range\n",
+             prog);
+ }
+ 
++static bool parse_code_sampler(const char * value, int * out) {
++    if (!value || !std::strcmp(value, "host")) {
++        *out = QT_CODE_SAMPLER_HOST;
++    } else if (!std::strcmp(value, "sycl")) {
++        *out = QT_CODE_SAMPLER_SYCL;
++    } else if (!std::strcmp(value, "auto")) {
++        *out = QT_CODE_SAMPLER_AUTO;
++    } else {
++        return false;
++    }
++    return true;
++}
++
+ // Trim a path down to its file name for the reported model id.
+ static std::string basename_of(const char * path) {
+     std::string s = path;
+@@ -66,6 +80,11 @@ int main(int argc, char ** argv) {
+     server_config cfg;
+     bool          use_fa     = true;
+     bool          clamp_fp16 = false;
++    int           code_sampler;
++    if (!parse_code_sampler(std::getenv("QWEN_CODE_SAMPLER"), &code_sampler)) {
++        fprintf(stderr, "[CLI] ERROR: QWEN_CODE_SAMPLER must be host, sycl, or auto\n");
++        return 1;
++    }
+ 
+     for (int i = 1; i < argc; i++) {
+         const char * arg = argv[i];
+@@ -81,6 +100,11 @@ int main(int argc, char ** argv) {
+             cfg.port = std::atoi(argv[++i]);
+         } else if (!std::strcmp(arg, "--lang") && i + 1 < argc) {
+             lang = argv[++i];
++        } else if (!std::strcmp(arg, "--code-sampler") && i + 1 < argc) {
++            if (!parse_code_sampler(argv[++i], &code_sampler)) {
++                fprintf(stderr, "[CLI] ERROR: --code-sampler must be host, sycl, or auto\n");
++                return 1;
++            }
+         } else if (!std::strcmp(arg, "--no-fa")) {
+             use_fa = false;
+         } else if (!std::strcmp(arg, "--clamp-fp16")) {
+@@ -208,11 +232,16 @@ int main(int argc, char ** argv) {
+     // the same name and injects the pre-extracted reference latents. A
+     // name matching neither is rejected instead of silently generating
+     // voiceless.
+-    be.synthesize = [q, &lang](const tts_request & req, const tts_sink & sink, std::string & err) -> int {
++    be.synthesize = [q, &lang, code_sampler](const tts_request & req, const tts_sink & sink, std::string & err) -> int {
+         struct qt_tts_params p;
+         qt_tts_default_params(&p);
+         p.text = req.input.c_str();
+-        p.lang = lang.c_str();
++        // Per-request language overrides the server CLI default when set.
++        // Upstream names: "german", "english", "chinese", "auto", …
++        const std::string & req_lang = req.language.empty() ? lang : req.language;
++        p.lang = req_lang.c_str();
++        p.code_sampler = code_sampler;
++        p.max_new_tokens = 256;
+ 
+         auto vit = req.voice.empty() ? g_voices.end() : g_voices.find(req.voice);
+         if (vit != g_voices.end()) {

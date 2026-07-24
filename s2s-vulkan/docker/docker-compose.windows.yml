@@ -1,0 +1,19 @@
+# Windows Docker Desktop: drop /dev/dri and force CPU backends.
+#
+#   docker compose -f docker-compose.yml -f docker/docker-compose.windows.yml \
+#     --profile backends --profile web up -d --build
+
+services:
+  s2s:
+    environment:
+      S2S_GPU: cpu
+      GGML_BACKEND: CPU
+    # Compose merge cannot remove devices cleanly on all versions — redefine service
+    # without host GPU nodes by clearing via empty deploy (devices still merge).
+    # Workaround: use entrypoint that ignores missing DRI (already does).
+    # If `devices: /dev/dri` fails on Windows, comment devices in docker-compose.yml
+    # or run this stack only on Linux/WSL2 with GPU.
+
+  llama:
+    environment:
+      GGML_BACKEND: CPU

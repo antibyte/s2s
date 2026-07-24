@@ -1,30 +1,62 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>s2s lab — voice test</title>
+  <title>s2s lab — voice testbed</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@300;500;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <canvas id="fx" aria-hidden="true"></canvas>
   <div class="vignette"></div>
+  <div class="grid-bg" aria-hidden="true"></div>
 
   <header class="top">
     <div class="brand">
-      <span class="logo-dot"></span>
-      <span>s2s<span class="dim">lab</span></span>
+      <span class="logo-mark" aria-hidden="true">
+        <span class="logo-dot"></span>
+      </span>
+      <div class="brand-text">
+        <span class="brand-title">s2s<span class="dim">lab</span></span>
+        <span class="brand-sub">voice testbed · 8&nbsp;GB stack</span>
+      </div>
     </div>
-    <div class="status" id="status">
-      <span class="pill" id="pill-conn" data-state="off">offline</span>
-      <span class="pill" id="pill-mode" data-state="idle">idle</span>
+
+    <div class="top-actions">
+      <span class="status-chip" id="status-chip" data-state="offline">Offline</span>
+      <button type="button" class="btn btn-sm primary" id="btn-connect">Verbinden</button>
+      <button type="button" class="btn btn-sm" id="btn-disconnect" disabled hidden>Trennen</button>
+      <button type="button" class="btn btn-sm btn-lab" id="btn-lab" aria-expanded="false" aria-controls="lab-drawer">
+        <span class="btn-lab-label">Lab</span>
+        <span class="lab-badge" id="lab-badge" hidden></span>
+      </button>
     </div>
   </header>
 
   <main class="stage">
+    <section class="pipeline" id="pipeline" aria-label="Aktive Pipeline">
+      <button type="button" class="pipe-node" data-stage="asr" data-lab-section="stack-asr" title="Lab · ASR öffnen">
+        <span class="pipe-kicker">ASR</span>
+        <span class="pipe-name" id="pipe-asr-name">faster-whisper</span>
+        <span class="pipe-meta" id="pipe-asr-meta">small · CPU</span>
+      </button>
+      <div class="pipe-arrow" aria-hidden="true"></div>
+      <button type="button" class="pipe-node" data-stage="llm" data-lab-section="stack-llm" title="Lab · LLM öffnen">
+        <span class="pipe-kicker">LLM</span>
+        <span class="pipe-name" id="pipe-llm-name">Granite 2B</span>
+        <span class="pipe-meta" id="pipe-llm-meta">Q4 · llama.cpp</span>
+      </button>
+      <div class="pipe-arrow" aria-hidden="true"></div>
+      <button type="button" class="pipe-node" data-stage="tts" data-lab-section="stack-tts" title="Lab · TTS öffnen">
+        <span class="pipe-kicker">TTS</span>
+        <span class="pipe-name" id="pipe-tts-name">Supertonic</span>
+        <span class="pipe-meta" id="pipe-tts-meta">ONNX · CPU</span>
+      </button>
+    </section>
+
     <div class="orb-wrap">
       <div class="orbit o1"></div>
       <div class="orbit o2"></div>
@@ -34,8 +66,8 @@
         id="mic"
         class="mic-btn"
         type="button"
-        aria-label="Hold to talk"
-        title="Hold to talk / click to toggle"
+        aria-label="Halten zum Sprechen"
+        title="Halten zum Sprechen · Leertaste"
       >
         <span class="mic-ring r1"></span>
         <span class="mic-ring r2"></span>
@@ -46,51 +78,212 @@
             <path d="M19 11a7 7 0 0 1-14 0" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
             <path d="M12 18v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
           </svg>
-          <span class="mic-label" id="mic-label">hold</span>
+          <span class="mic-label" id="mic-label">halten</span>
         </span>
       </button>
     </div>
 
-    <p class="hint" id="hint">Connect, then hold the button and speak.</p>
+    <p class="hint" id="hint">Verbinden, dann Orb halten und sprechen.</p>
+
+    <div class="live-captions" aria-live="polite" aria-label="Gespräch">
+      <div class="live-cap asr" id="live-asr">
+        <span class="live-k">du</span>
+        <span class="live-t placeholder" id="live-asr-t">Noch nichts gesagt</span>
+      </div>
+      <div class="live-cap llm" id="live-llm">
+        <span class="live-k">bot</span>
+        <span class="live-t placeholder" id="live-llm-t">Antwort erscheint hier</span>
+      </div>
+    </div>
   </main>
 
-  <aside class="panel" id="panel">
-    <details open>
-      <summary>Connection</summary>
-      <label>
-        WebSocket
-        <input id="ws-url" type="text" spellcheck="false" autocomplete="off"
-          placeholder="ws://127.0.0.1:8765" />
-      </label>
-      <label class="row">
-        <span>Mode</span>
-        <select id="talk-mode">
-          <option value="hold">Push-to-talk (hold)</option>
-          <option value="toggle">Toggle</option>
-        </select>
-      </label>
-      <div class="btn-row">
-        <button type="button" class="btn primary" id="btn-connect">Connect</button>
-        <button type="button" class="btn" id="btn-disconnect" disabled>Disconnect</button>
-      </div>
-    </details>
-    <details>
-      <summary>Levels</summary>
-      <div class="meters">
-        <div class="meter"><span>mic</span><div class="bar"><i id="bar-mic"></i></div></div>
-        <div class="meter"><span>out</span><div class="bar"><i id="bar-out"></i></div></div>
-      </div>
-    </details>
-    <details>
-      <summary>Log</summary>
-      <pre id="log" class="log"></pre>
-    </details>
-  </aside>
+  <!-- First-run coach (dismissible) -->
+  <div class="coach" id="coach" hidden role="region" aria-label="Kurzanleitung">
+    <div class="coach-inner">
+      <p class="coach-title">Schnell starten</p>
+      <ol class="coach-steps">
+        <li><strong>Verbinden</strong> im Header</li>
+        <li>Optional: <strong>Lab</strong> · Preset wählen</li>
+        <li><strong>Orb halten</strong> und sprechen</li>
+      </ol>
+      <button type="button" class="btn btn-sm primary" id="btn-coach-dismiss">Verstanden</button>
+    </div>
+  </div>
 
-  <footer class="foot">
-    <span>PCM 16 kHz mono · raw WebSocket</span>
-    <span id="fps"></span>
-  </footer>
+  <!-- Toast for transient feedback -->
+  <div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
+
+  <dialog class="model-dialog" id="model-dialog" aria-labelledby="model-dialog-title">
+    <div class="model-dialog-head">
+      <span class="model-dialog-kicker">Modellverwaltung</span>
+      <h2 id="model-dialog-title">Modell herunterladen</h2>
+    </div>
+    <p class="model-dialog-copy" id="model-dialog-copy"></p>
+    <p class="model-dialog-size" id="model-dialog-size"></p>
+    <div class="model-progress" id="model-progress" hidden>
+      <div class="model-progress-track">
+        <i id="model-progress-fill"></i>
+      </div>
+      <span id="model-progress-label">0 %</span>
+    </div>
+    <p class="model-dialog-error" id="model-dialog-error" hidden></p>
+    <div class="model-dialog-actions">
+      <button type="button" class="btn" id="model-dialog-cancel">Abbrechen</button>
+      <button type="button" class="btn primary" id="model-dialog-confirm">Herunterladen</button>
+    </div>
+  </dialog>
+
+  <!-- Lab drawer / sheet -->
+  <div class="lab-scrim" id="lab-scrim" hidden></div>
+  <aside
+    class="lab-drawer"
+    id="lab-drawer"
+    aria-label="Lab-Einstellungen"
+    aria-hidden="true"
+  >
+    <div class="lab-head">
+      <div class="lab-head-text">
+        <span class="lab-title">Lab</span>
+        <span class="lab-sub">Stack · Verbindung · Debug</span>
+      </div>
+      <button type="button" class="btn btn-icon" id="btn-lab-close" aria-label="Lab schließen">×</button>
+    </div>
+
+    <div class="lab-body">
+      <details class="lab-section" id="sec-quick" open>
+        <summary><span>Schnellstart</span></summary>
+        <label class="row">
+          <span>Sprechmodus</span>
+          <select id="talk-mode">
+            <option value="hold">Halten (Push-to-talk)</option>
+            <option value="toggle">Tippen (Toggle)</option>
+          </select>
+        </label>
+        <p class="field-hint">Leertaste = halten / tippen (außer in Eingabefeldern).</p>
+        <div class="btn-row">
+          <button type="button" class="btn primary" id="btn-connect-lab">Verbinden</button>
+          <button type="button" class="btn" id="btn-disconnect-lab" disabled>Trennen</button>
+        </div>
+      </details>
+
+      <details class="lab-section" id="sec-stack" open>
+        <summary><span>Stack · ASR / TTS / LLM</span></summary>
+        <p class="stack-note">
+          Presets und Engines — <strong>Hot-swap live</strong> über WebSocket.
+        </p>
+
+        <div class="preset-row">
+          <span class="preset-label">Presets</span>
+          <div class="preset-chips" id="preset-chips"></div>
+        </div>
+
+        <div class="field-block" id="stack-asr">
+          <div class="field-head">
+            <span class="field-title">ASR · Speech-to-Text</span>
+            <span class="field-badge" id="asr-badge">live</span>
+          </div>
+          <div class="choice-grid" id="asr-choices" role="listbox" aria-label="ASR wählen"></div>
+        </div>
+
+        <div class="field-block" id="stack-tts">
+          <div class="field-head">
+            <span class="field-title">TTS · Text-to-Speech</span>
+            <span class="field-badge" id="tts-badge">live</span>
+          </div>
+          <div class="choice-grid" id="tts-choices" role="listbox" aria-label="TTS wählen"></div>
+          <div class="voice-picker" id="voice-field" hidden>
+            <label for="voice-select">Stimme</label>
+            <select id="voice-select" aria-describedby="voice-hint"></select>
+            <p class="field-hint" id="voice-hint"></p>
+          </div>
+        </div>
+
+        <div class="field-block" id="stack-llm">
+          <div class="field-head">
+            <span class="field-title">LLM · Antwortmodell</span>
+            <span class="field-badge" id="llm-badge">live</span>
+          </div>
+          <div class="choice-grid" id="llm-choices" role="listbox" aria-label="LLM wählen"></div>
+        </div>
+
+        <div class="budget-bar" id="budget-bar" aria-hidden="true">
+          <div class="budget-fill" id="budget-fill"></div>
+        </div>
+        <p class="stack-budget" id="stack-budget"></p>
+      </details>
+
+      <details class="lab-section" id="sec-benchmark">
+        <summary><span>Vergleichsmessung</span></summary>
+        <p class="stack-note">
+          Misst den aktiven TTS-, ASR- oder LLM-Pfad. Leer lassen für den standardisierten deutschen Testsatz.
+        </p>
+        <label>
+          Messpfad
+          <select id="benchmark-kind">
+            <option value="tts">TTS · TTFA / RTF / Blindprobe</option>
+            <option value="asr">ASR · Latenz / WER / CER</option>
+            <option value="llm">LLM · TTFT / Tokens pro Sekunde</option>
+          </select>
+        </label>
+        <label>
+          Eigene Sätze · eine Zeile pro Probe
+          <textarea id="benchmark-prompts" rows="4" maxlength="10000"
+            placeholder="Guten Morgen, wie kann ich dir helfen?"></textarea>
+        </label>
+        <div class="btn-row benchmark-actions">
+          <button type="button" class="btn primary" id="btn-benchmark">TTS messen</button>
+          <a class="btn benchmark-export" id="benchmark-export" href="#" hidden>CSV</a>
+        </div>
+        <p class="benchmark-status" id="benchmark-status">Noch keine Messung.</p>
+        <div class="benchmark-table-wrap" id="benchmark-table-wrap" hidden>
+          <table class="benchmark-table">
+            <thead id="benchmark-head">
+              <tr><th>Probe</th><th>Audio</th><th>Bewertung</th><th>TTFA</th><th>RTF</th><th>Dauer</th><th>RAM</th></tr>
+            </thead>
+            <tbody id="benchmark-results"></tbody>
+          </table>
+        </div>
+      </details>
+
+      <details class="lab-section" id="sec-advanced">
+        <summary><span>Erweitert</span></summary>
+
+        <label>
+          WebSocket-URL
+          <input id="ws-url" type="text" spellcheck="false" autocomplete="off"
+            placeholder="wss://host:9999/ws" />
+        </label>
+
+        <details class="lab-nested">
+          <summary><span>Env / Runtime-Hinweise</span></summary>
+          <p class="stack-hint" id="stack-hint"></p>
+        </details>
+
+        <div class="field-block">
+          <div class="field-head">
+            <span class="field-title">Pegel</span>
+          </div>
+          <div class="meters">
+            <div class="meter"><span>mic</span><div class="bar"><i id="bar-mic"></i></div></div>
+            <div class="meter"><span>out</span><div class="bar"><i id="bar-out"></i></div></div>
+          </div>
+        </div>
+
+        <div class="field-block">
+          <div class="field-head">
+            <span class="field-title">Log</span>
+            <button type="button" class="chip chip-quiet" id="btn-log-clear">leeren</button>
+          </div>
+          <pre id="log" class="log"></pre>
+        </div>
+
+        <p class="lab-foot-meta">
+          PCM 16&nbsp;kHz · testbed
+          <span id="fps"></span>
+        </p>
+      </details>
+    </div>
+  </aside>
 
   <script src="app.js" type="module"></script>
 </body>

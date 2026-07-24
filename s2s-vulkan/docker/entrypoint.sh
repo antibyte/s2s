@@ -36,6 +36,7 @@ if [[ -e /dev/nvidia0 || -e /dev/nvidiactl ]]; then
 fi
 
 # ── GPU pre-seed (Rust probe may refine) ─────────────────────────────
+# Order: explicit env → NVIDIA → oneAPI SYCL → Vulkan (/dev/dri) → CPU
 if [[ -z "${GGML_BACKEND:-}" ]]; then
   if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
     if ls /usr/share/vulkan/icd.d/*nvidia* >/dev/null 2>&1 \
@@ -47,9 +48,14 @@ if [[ -z "${GGML_BACKEND:-}" ]]; then
       export GGML_BACKEND="CUDA0"
       log "Pre-select CUDA0 (nvidia-smi OK, no NVIDIA Vulkan ICD in image)"
     fi
+  elif [[ -n "${ONEAPI_ROOT:-}" ]] || [[ -d /opt/intel/oneapi ]] || command -v sycl-ls >/dev/null 2>&1; then
+    # Prefer SYCL on Intel when toolkit is in the image (see Dockerfile.tts-sycl).
+    export GGML_BACKEND="SYCL0"
+    export ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:gpu}"
+    log "Pre-select SYCL0 (oneAPI/sycl-ls present, selector=${ONEAPI_DEVICE_SELECTOR})"
   elif [[ -d /dev/dri ]] && ls /dev/dri/renderD* >/dev/null 2>&1; then
     export GGML_BACKEND="Vulkan0"
-    log "Pre-select Vulkan0 (/dev/dri render node)"
+    log "Pre-select Vulkan0 (/dev/dri render node; no oneAPI — Intel Qwen may be unreliable)"
   else
     export GGML_BACKEND="CPU"
     log "Pre-select CPU (no GPU nodes detected)"
@@ -71,9 +77,10 @@ download_models() {
 }
 
 ensure_models_dir() {
-  mkdir -p "$S2S_MODELS_DIR"
+  local data_dir="${S2S_DATA_DIR:-/data}"
+  mkdir -p "$S2S_MODELS_DIR" "$data_dir"
   if [[ "$(id -u)" -eq 0 ]]; then
-    chown -R s2s:s2s "$S2S_MODELS_DIR" 2>/dev/null || true
+    chown -R s2s:s2s "$S2S_MODELS_DIR" "$data_dir" 2>/dev/null || true
   fi
 }
 
@@ -113,6 +120,6 @@ export LLAMA_MODEL_PATH="${S2S_LLM_MODEL_PATH:-${LLAMA_MODEL_PATH:-}}"
 
 log "Starting: s2s-vulkan $*"
 if [[ $# -eq 0 ]]; then
-  set -- --mode realtime --host 0.0.0.0 --port 8765 --gpu auto
+  set -- --mode lab --host 0.0.0.0 --port 8765 --gpu auto
 fi
 exec_as_app s2s-vulkan "$@"

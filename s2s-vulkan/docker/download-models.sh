@@ -20,9 +20,9 @@
 #   S2S_WHISPER_MODEL_URL   full URL override (skips HF path)
 #   S2S_WHISPER_PATH        local destination filename (under MODELS_DIR)
 #
-# LLM:
-#   S2S_LLM_HF_REPO         default Qwen/Qwen2.5-1.5B-Instruct-GGUF
-#   S2S_LLM_HF_FILE         default qwen2.5-1.5b-instruct-q4_k_m.gguf
+# LLM (default sized for ~8GB shared GPU stacks — tiny instruct GGUF):
+#   S2S_LLM_HF_REPO         default Edge-Quant/granite-3.3-2b-instruct-Q4_K_M-GGUF
+#   S2S_LLM_HF_FILE         default granite-3.3-2b-instruct-q4_k_m.gguf (~1.55 GB)
 #   S2S_LLM_MODEL_URL       full URL override
 #   S2S_LLM_PATH            local destination filename
 #
@@ -172,8 +172,9 @@ fi
 # ── LLM ──────────────────────────────────────────────────────────────
 
 if should_download_category "${S2S_DOWNLOAD_LLM:-true}"; then
-  L_REPO="${S2S_LLM_HF_REPO:-Qwen/Qwen2.5-1.5B-Instruct-GGUF}"
-  L_FILE="${S2S_LLM_HF_FILE:-qwen2.5-1.5b-instruct-q4_k_m.gguf}"
+  # Granite 3.3 2B Q4_K_M: ~1.55 GB weights — leaves room for ASR (+ optional TTS) on 8 GB GPUs.
+  L_REPO="${S2S_LLM_HF_REPO:-Edge-Quant/granite-3.3-2b-instruct-Q4_K_M-GGUF}"
+  L_FILE="${S2S_LLM_HF_FILE:-granite-3.3-2b-instruct-q4_k_m.gguf}"
   L_PATH="${S2S_LLM_PATH:-$L_FILE}"
   L_DEST="${MODELS_DIR%/}/llm/${L_PATH##*/}"
   if [[ "$L_PATH" == */* ]]; then

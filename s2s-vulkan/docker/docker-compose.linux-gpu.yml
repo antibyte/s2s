@@ -1,0 +1,48 @@
+# Linux host with /dev/dri (Intel/AMD) or use nvidia override separately.
+#
+#   docker compose -f docker-compose.yml -f docker/docker-compose.linux-gpu.yml \
+#     --profile backends --profile web up -d
+
+x-dri-devices: &dri-devices
+  - /dev/dri:/dev/dri
+
+services:
+  s2s:
+    devices: *dri-devices
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+
+  whisper:
+    devices: *dri-devices
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+
+  llama:
+    devices: *dri-devices
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+    environment:
+      # Offload all layers when a real GPU is visible in the container
+      LLAMA_NGL: ${LLAMA_NGL:-99}
+    command:
+      - -m
+      - /opt/s2s-models/granite-3.3-2b-instruct-q4_k_m.gguf
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8081"
+      - -ngl
+      - "${LLAMA_NGL:-99}"
+      - -c
+      - "${LLAMA_CTX:-2048}"
+      - --alias
+      - ${S2S_LLM_MODEL:-granite-3.3-2b-instruct}
+
+  tts:
+    devices: *dri-devices
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"

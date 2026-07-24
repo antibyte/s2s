@@ -14,6 +14,7 @@ pub async fn run_vad(
     mut audio_in: mpsc::Receiver<QueueItem<Vec<u8>>>,
     vad_out: mpsc::Sender<QueueItem<VadAudio>>,
     should_listen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    turns: std::sync::Arc<crate::runtime::TurnCoordinator>,
 ) {
     info!(
         "VAD handler started (backend={:?}, thresh={}, min_speech={}ms, min_silence={}ms)",
@@ -39,7 +40,14 @@ pub async fn run_vad(
                 }
                 let i16s = bytes_to_i16_le(&pcm_bytes);
                 let f32s = i16_to_f32(&i16s);
-                if let Some(seg) = state.push(&f32s, cfg.vad) {
+                if let Some(mut seg) = state.push(&f32s, cfg.vad) {
+                    let Some(lease) = turns.try_acquire() else {
+                        debug!("VAD dropped a completed segment while stack switching is paused");
+                        continue;
+                    };
+                    if let Some(turn) = seg.turn.as_mut() {
+                        turn.attach_lease(lease);
+                    }
                     info!(
                         "VAD: speech segment {:.0} ms (turn={})",
                         seg.samples.len() as f32 / seg.sample_rate as f32 * 1000.0,
@@ -139,11 +147,14 @@ impl EnergyVad {
                     self.speech_run += frame.len();
                 } else {
                     self.silence_run += frame.len();
+                    // End utterance after enough trailing silence AND enough actual speech
+                    // (speech_run), not just buffer length (buffer includes silence).
                     if self.silence_run >= self.min_silence_samples
-                        && self.speech_buf.len() >= self.min_speech_samples
+                        && self.speech_run >= self.min_speech_samples
                     {
-                        // Trim trailing silence but keep pad.
-                        let trim = self.silence_run.saturating_sub(self.pad_samples);
+                        // Keep a generous trailing pad for STT (don't strip most of the clip).
+                        let keep_pad = self.pad_samples.max(ms_to_samples(200, self.sample_rate));
+                        let trim = self.silence_run.saturating_sub(keep_pad);
                         if trim > 0 && trim < self.speech_buf.len() {
                             self.speech_buf.truncate(self.speech_buf.len() - trim);
                         }
@@ -152,14 +163,23 @@ impl EnergyVad {
                         self.silence_run = 0;
                         self.speech_run = 0;
                         self.pre_roll.clear();
-                        finished = Some(VadAudio {
-                            samples,
-                            sample_rate: self.sample_rate,
-                            mode: VadMode::Final,
-                            turn: Some(TurnId::next()),
-                            created_at: std::time::Instant::now(),
-                        });
-                        break;
+                        // Drop garbage blips that slipped past (e.g. click + noise).
+                        let min_emit = ms_to_samples(400, self.sample_rate);
+                        if samples.len() < min_emit {
+                            debug!(
+                                "VAD drop post-trim segment {:.0} ms",
+                                samples.len() as f32 / self.sample_rate as f32 * 1000.0
+                            );
+                        } else {
+                            finished = Some(VadAudio {
+                                samples,
+                                sample_rate: self.sample_rate,
+                                mode: VadMode::Final,
+                                turn: Some(TurnId::next()),
+                                created_at: std::time::Instant::now(),
+                            });
+                            break;
+                        }
                     }
                 }
             }

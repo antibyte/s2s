@@ -1,35 +1,42 @@
 # s2s-vulkan — GHCR image + first-boot model download
 #
-#   cp .env.example .env   # set GHCR_OWNER / IMAGE
-#   docker compose pull && docker compose up -d
-#   docker compose --profile full up -d
+# 8 GB GPU lab stack (default, no Ollama):
+#   ASR  faster-whisper tiny (bundled)
+#   LLM  Granite 3.3 2B Q4 (bundled)
+#   TTS  Supertonic ONNX (bundled, CPU)  ← immediately ready
+#   Optional Qwen TTS     ~3–4 GB alone — use profile "tts" carefully
 #
-# Web test UI (optional):
-#   docker compose --profile web up -d --build
+#   cp .env.example .env
+#   docker compose --profile backends --profile web up -d --build
 #   open http://localhost:8088
 #
+# Full stack with Qwen TTS (may exceed 8 GB if all GPU-resident):
+#   docker compose --profile full up -d
+#
 # NVIDIA:
-#   docker compose -f docker-compose.yml -f docker/docker-compose.nvidia.yml --profile full up -d
+#   docker compose -f docker-compose.yml -f docker/docker-compose.nvidia.yml --profile backends --profile web up -d
 
 x-gpu-env: &gpu-env
   S2S_GPU: ${S2S_GPU:-auto}
   GGML_BACKEND: ${GGML_BACKEND:-}
-  NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
-  NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,utility,graphics}
 
 x-model-env: &model-env
   S2S_MODELS_DIR: /models
-  S2S_DOWNLOAD_MODELS: ${S2S_DOWNLOAD_MODELS:-auto}
+  # Lab downloads are controller-owned and require explicit UI approval.
+  # Keep these literal so a legacy .env cannot re-enable silent first boot.
+  S2S_DOWNLOAD_MODELS: "false"
   S2S_DOWNLOAD_FORCE: ${S2S_DOWNLOAD_FORCE:-0}
-  S2S_DOWNLOAD_WHISPER: ${S2S_DOWNLOAD_WHISPER:-true}
-  S2S_DOWNLOAD_LLM: ${S2S_DOWNLOAD_LLM:-true}
-  S2S_DOWNLOAD_TTS: ${S2S_DOWNLOAD_TTS:-false}
-  S2S_WHISPER_PRESET: ${S2S_WHISPER_PRESET:-small}
+  S2S_DOWNLOAD_WHISPER: "false"
+  S2S_DOWNLOAD_LLM: "false"
+  S2S_DOWNLOAD_TTS: "false"
+  # base ≈ smaller VRAM/faster than small; still multilingual
+  S2S_WHISPER_PRESET: ${S2S_WHISPER_PRESET:-tiny}
   S2S_WHISPER_HF_REPO: ${S2S_WHISPER_HF_REPO:-ggerganov/whisper.cpp}
   S2S_WHISPER_HF_FILE: ${S2S_WHISPER_HF_FILE:-}
   S2S_WHISPER_MODEL_URL: ${S2S_WHISPER_MODEL_URL:-}
-  S2S_LLM_HF_REPO: ${S2S_LLM_HF_REPO:-Qwen/Qwen2.5-1.5B-Instruct-GGUF}
-  S2S_LLM_HF_FILE: ${S2S_LLM_HF_FILE:-qwen2.5-1.5b-instruct-q4_k_m.gguf}
+  # Tiny local instruct (no Ollama): IBM Granite 3.3 2B Q4_K_M ~1.55 GB GGUF
+  S2S_LLM_HF_REPO: ${S2S_LLM_HF_REPO:-Edge-Quant/granite-3.3-2b-instruct-Q4_K_M-GGUF}
+  S2S_LLM_HF_FILE: ${S2S_LLM_HF_FILE:-granite-3.3-2b-instruct-q4_k_m.gguf}
   S2S_LLM_MODEL_URL: ${S2S_LLM_MODEL_URL:-}
   S2S_DOWNLOAD_EXTRA: ${S2S_DOWNLOAD_EXTRA:-}
   S2S_HF_TOKEN: ${S2S_HF_TOKEN:-${HF_TOKEN:-}}
@@ -39,14 +46,31 @@ x-dri-devices: &dri-devices
   - /dev/dri:/dev/dri
 
 services:
+  # Restricted Docker Engine bridge. Only the controller can reach it and only
+  # container lifecycle endpoints are enabled.
+  docker-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:v0.4.2
+    container_name: s2s-docker-proxy
+    environment:
+      CONTAINERS: "1"
+      INFO: "1"
+      VERSION: "1"
+      POST: "1"
+      LOG_LEVEL: warning
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - s2s-control
+    restart: unless-stopped
+
   # ── One-shot model fetcher (shared volume) ─────────────────────────
   model-init:
-    image: ${IMAGE:-ghcr.io/${GHCR_OWNER:-local}/s2s-vulkan}:${TAG:-latest}
+    # Lightweight curl-only image — do not rebuild the full Rust orchestrator just to fetch models
+    image: ${MODEL_INIT_IMAGE:-s2s-model-init:local}
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.backend-init
     container_name: s2s-model-init
-    entrypoint: ["/usr/local/bin/download-models.sh"]
     environment:
       <<: [*gpu-env, *model-env]
     volumes:
@@ -66,29 +90,57 @@ services:
     depends_on:
       model-init:
         condition: service_completed_successfully
+      docker-proxy:
+        condition: service_started
+      supertonic:
+        condition: service_healthy
+      whisper-tiny:
+        condition: service_healthy
+      llama:
+        condition: service_healthy
     environment:
       <<: [*gpu-env, *model-env]
       S2S_DOCKER: "1"
       RUST_LOG: ${RUST_LOG:-info}
-      S2S_WHISPER_URL: ${S2S_WHISPER_URL:-http://whisper:8082}
-      S2S_LLM_URL: ${S2S_LLM_URL:-http://llama:8081/v1}
+      S2S_BACKEND_CATALOG: /app/config/backends.json
+      S2S_WHISPER_URL: ${S2S_WHISPER_URL:-http://whisper-tiny:8082}
+      S2S_LLM_URL: ${S2S_LLM_URL:-http://llama-fallback:8081/v1}
+      S2S_LLM_EXTERNAL_URL: ${S2S_LLM_EXTERNAL_URL:-http://host.docker.internal:11434/v1}
+      S2S_LLM_EXTERNAL_MODEL: ${S2S_LLM_EXTERNAL_MODEL:-${S2S_LLM_MODEL:-qwen3.5:cloud}}
       S2S_LLM_API_KEY: ${S2S_LLM_API_KEY:-}
-      S2S_LLM_MODEL: ${S2S_LLM_MODEL:-local-model}
-      S2S_TTS_URL: ${S2S_TTS_URL:-http://tts:8083/v1/audio/speech}
-    ports:
-      - "${S2S_PORT:-8765}:8765"
+      S2S_LLM_MODEL: ${S2S_LLM_MODEL:-granite-3.3-2b-instruct}
+      S2S_TTS_URL: ${S2S_TTS_URL:-http://supertonic:8083/v1/audio/speech}
+      S2S_DOCKER_PROXY_URL: http://docker-proxy:2375
+      S2S_LAB_HEALTH_TIMEOUT_SECS: ${S2S_LAB_HEALTH_TIMEOUT_SECS:-300}
+      S2S_LAB_PLATFORM: ${S2S_LAB_PLATFORM:-}
+      S2S_LAB_GPU_VENDOR: ${S2S_LAB_GPU_VENDOR:-}
+      S2S_LAB_DEVICE_NAME: ${S2S_LAB_DEVICE_NAME:-}
+      S2S_LAB_ACCELERATORS: ${S2S_LAB_ACCELERATORS:-}
+      S2S_ALLOW_EXPERIMENTAL: ${S2S_ALLOW_EXPERIMENTAL:-false}
+      # Unload managed model containers after last WebSocket disconnect (0 = off).
+      S2S_LAB_IDLE_UNLOAD_SECS: ${S2S_LAB_IDLE_UNLOAD_SECS:-120}
+      S2S_QWEN_MAX_NEW_TOKENS: ${S2S_QWEN_MAX_NEW_TOKENS:-256}
+      S2S_TTS_STREAM_CHUNK_MS: ${S2S_TTS_STREAM_CHUNK_MS:-160}
+      # STT language hint + dedicated TTS language for Supertonic/HTTP backends
+      S2S_LANGUAGE: ${S2S_LANGUAGE:-de}
+      S2S_TTS_LANGUAGE: ${S2S_TTS_LANGUAGE:-de}
+      # Default TTS = isolated Supertonic sidecar so switching releases memory.
+      S2S_TTS: http
+      S2S_SUPERTONIC_VOICE: ${S2S_SUPERTONIC_VOICE:-M1}
+      S2S_SUPERTONIC_MODEL_DIR: ${S2S_SUPERTONIC_MODEL_DIR:-/opt/s2s-models/supertonic/onnx}
+      S2S_SYSTEM_PROMPT: ${S2S_SYSTEM_PROMPT:-Du bist ein hilfreicher Sprachassistent. Antworte immer auf Deutsch, kurz und gesprächig (1-3 Sätze).}
     volumes:
       - models:/models
-    devices: *dri-devices
-    group_add:
-      - "${VIDEO_GID:-44}"
-      - "${RENDER_GID:-109}"
+      - lab-data:/data
+      - ./config/backends.json:/app/config/backends.json:ro
+    # GPU nodes: enable via docker/docker-compose.linux-gpu.yml on Linux hosts.
+    # (Windows Docker Desktop has no /dev/dri — omit here so `compose up` works.)
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command:
-      # Use websocket for the web lab (binary PCM). realtime also works without the UI.
+      # Lab mode serves binary PCM WebSockets plus the catalog/controller API.
       - --mode
-      - ${S2S_MODE:-websocket}
+      - lab
       - --host
       - "0.0.0.0"
       - --port
@@ -96,9 +148,34 @@ services:
       - --gpu
       - ${S2S_GPU:-auto}
       - --tts
-      - ${S2S_TTS:-http}
+      - http
+      - --tts-url
+      - ${S2S_TTS_URL:-http://supertonic:8083/v1/audio/speech}
+      - --language
+      - ${S2S_LANGUAGE:-de}
+      - --tts-language
+      - ${S2S_TTS_LANGUAGE:-de}
+      - --supertonic-voice
+      - ${S2S_SUPERTONIC_VOICE:-M1}
+      - --llm-base-url
+      - ${S2S_LLM_URL:-http://llama-fallback:8081/v1}
+      - --model-name
+      - ${S2S_LLM_MODEL:-granite-3.3-2b-instruct}
+      - --whisper-url
+      - ${S2S_WHISPER_URL:-http://whisper-tiny:8082}
+      - --max-tokens
+      - "${S2S_MAX_TOKENS:-128}"
+      - --min-speech-ms
+      - "${S2S_MIN_SPEECH_MS:-900}"
+      - --min-silence-ms
+      - "${S2S_MIN_SILENCE_MS:-700}"
+      - --thresh
+      - "${S2S_VAD_THRESH:-0.62}"
+      - --system-prompt
+      - ${S2S_SYSTEM_PROMPT:-Du bist ein hilfreicher Sprachassistent. Antworte immer auf Deutsch, kurz und gesprächig (1-3 Sätze).}
     networks:
       - s2s
+      - s2s-control
     healthcheck:
       test: ["CMD", "/usr/local/bin/s2s-vulkan", "--list-gpus"]
       interval: 60s
@@ -106,74 +183,347 @@ services:
       retries: 3
       start_period: 120s
 
+  # Default CPU TTS. It uses the same Rust binary in sidecar mode and can be
+  # stopped completely when Qwen or Kokoro is selected.
+  supertonic:
+    image: ${IMAGE:-ghcr.io/${GHCR_OWNER:-local}/s2s-vulkan}:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: s2s-supertonic
+    labels:
+      s2s.lab.managed: "true"
+      stage: tts
+      backend-id: supertonic
+    environment:
+      S2S_DOCKER: "1"
+      RUST_LOG: ${RUST_LOG:-info}
+      S2S_SUPERTONIC_MODEL_DIR: /opt/s2s-models/supertonic/onnx
+      S2S_SUPERTONIC_VOICE: ${S2S_SUPERTONIC_VOICE:-M1}
+      S2S_TTS_LANGUAGE: ${S2S_TTS_LANGUAGE:-de}
+    command:
+      - --mode
+      - tts-server
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8083"
+      - --skip-health
+      - --supertonic-model-dir
+      - /opt/s2s-models/supertonic/onnx
+      - --supertonic-voice
+      - ${S2S_SUPERTONIC_VOICE:-M1}
+      - --tts-language
+      - ${S2S_TTS_LANGUAGE:-de}
+      - --tts-sample-rate
+      - "16000"
+    networks:
+      - s2s
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8083/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      # ONNX graph optimization can take roughly two minutes on Docker Desktop.
+      start_period: 180s
+
+  # faster-whisper (CTranslate2) — same quality path as the pre-Docker lab server.
+  # whisper.cpp was hallucinating on short VAD clips ("* Musik *", garbage German).
   whisper:
-    image: ${WHISPER_IMAGE:-ghcr.io/ggml-org/whisper.cpp:main}
-    container_name: s2s-whisper
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.whisper
+    image: ${WHISPER_IMAGE:-s2s-whisper-fw:local}
+    container_name: s2s-whisper-base
+    labels:
+      s2s.lab.managed: "true"
+      stage: asr
+      backend-id: fw-base
     profiles: ["backends", "full"]
     depends_on:
       model-init:
         condition: service_completed_successfully
     environment:
       <<: *gpu-env
+      S2S_WHISPER_MODEL: /models/faster-whisper/base
+      S2S_WHISPER_DEVICE: ${S2S_WHISPER_DEVICE:-auto}
+      S2S_WHISPER_COMPUTE: ${S2S_WHISPER_COMPUTE:-int8}
+      HF_HOME: /models/hf-cache
     volumes:
-      - models:/models:ro
+      - models:/models
     ports:
       - "${WHISPER_PORT:-8082}:8082"
-    devices: *dri-devices
-    group_add:
-      - "${VIDEO_GID:-44}"
-      - "${RENDER_GID:-109}"
     command:
-      - -m
-      - /models/whisper/${WHISPER_MODEL_FILE:-ggml-small.bin}
+      - python
+      - -u
+      - /app/whisper_stt_server.py
       - --host
       - "0.0.0.0"
       - --port
       - "8082"
+      - --model
+      - /models/faster-whisper/base
+      - --device
+      - ${S2S_WHISPER_DEVICE:-auto}
+      - --compute-type
+      - ${S2S_WHISPER_COMPUTE:-int8}
       - --language
-      - ${WHISPER_LANGUAGE:-auto}
+      - ${WHISPER_LANGUAGE:-${S2S_LANGUAGE:-de}}
     networks:
-      - s2s
+      s2s:
+        aliases:
+          - whisper
+          - whisper-base
     restart: unless-stopped
 
-  llama:
-    image: ${LLAMA_IMAGE:-ghcr.io/ggerganov/llama.cpp:server}
-    container_name: s2s-llama
-    profiles: ["backends", "full"]
+  whisper-tiny:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.whisper
+    image: ${WHISPER_IMAGE:-s2s-whisper-fw:local}
+    container_name: s2s-whisper-tiny
+    profiles: ["managed"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: asr
+      backend-id: fw-tiny
     depends_on:
       model-init:
         condition: service_completed_successfully
     environment:
       <<: *gpu-env
+      S2S_WHISPER_MODEL: /opt/s2s-models/faster-whisper-tiny
+      S2S_WHISPER_DEVICE: ${S2S_WHISPER_DEVICE:-auto}
+      S2S_WHISPER_COMPUTE: ${S2S_WHISPER_COMPUTE:-int8}
+      HF_HOME: /models/hf-cache
     volumes:
-      - models:/models:ro
+      - models:/models
+    command:
+      - python
+      - -u
+      - /app/whisper_stt_server.py
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8082"
+      - --model
+      - /opt/s2s-models/faster-whisper-tiny
+      - --device
+      - ${S2S_WHISPER_DEVICE:-auto}
+      - --compute-type
+      - ${S2S_WHISPER_COMPUTE:-int8}
+      - --language
+      - ${WHISPER_LANGUAGE:-${S2S_LANGUAGE:-de}}
+    networks:
+      s2s:
+        aliases:
+          - whisper-tiny
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+
+  whisper-small:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.whisper
+    image: ${WHISPER_IMAGE:-s2s-whisper-fw:local}
+    container_name: s2s-whisper-small
+    profiles: ["managed"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: asr
+      backend-id: fw-small
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *gpu-env
+      S2S_WHISPER_MODEL: /models/faster-whisper/small
+      S2S_WHISPER_DEVICE: ${S2S_WHISPER_DEVICE:-auto}
+      S2S_WHISPER_COMPUTE: ${S2S_WHISPER_COMPUTE:-int8}
+      HF_HOME: /models/hf-cache
+    volumes:
+      - models:/models
+    command:
+      - python
+      - -u
+      - /app/whisper_stt_server.py
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8082"
+      - --model
+      - /models/faster-whisper/small
+      - --device
+      - ${S2S_WHISPER_DEVICE:-auto}
+      - --compute-type
+      - ${S2S_WHISPER_COMPUTE:-int8}
+      - --language
+      - ${WHISPER_LANGUAGE:-${S2S_LANGUAGE:-de}}
+    networks:
+      s2s:
+        aliases:
+          - whisper-small
+    restart: unless-stopped
+
+  parakeet-cpu:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.parakeet
+      args:
+        TORCH_VERSION: ${PARAKEET_TORCH_VERSION:-2.11.0}
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    image: ${PARAKEET_CPU_IMAGE:-s2s-asr-parakeet:cpu}
+    container_name: s2s-parakeet-cpu
+    profiles: ["managed"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: asr
+      backend-id: parakeet-tdt-0.6b-v3
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      PARAKEET_MODEL_DIR: /models/parakeet-tdt-0.6b-v3
+      PARAKEET_DEVICE: cpu
+      PARAKEET_DTYPE: float32
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - models:/models
+    networks:
+      s2s:
+        aliases:
+          - parakeet-cpu
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 300s
+
+  # Optional Voxtral Mini 4B Realtime ASR — large VRAM (~16 GB BF16). Lab uses
+  # Transformers batch /inference; production streaming is vLLM realtime.
+  voxtral-cpu:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.voxtral
+      args:
+        TORCH_VERSION: ${VOXTRAL_TORCH_VERSION:-2.11.0}
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    image: ${VOXTRAL_CPU_IMAGE:-s2s-asr-voxtral:cpu}
+    container_name: s2s-voxtral-cpu
+    profiles: ["managed", "voxtral"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: asr
+      backend-id: voxtral-mini-4b-realtime
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      VOXTRAL_MODEL_DIR: /models/voxtral-mini-4b-realtime
+      VOXTRAL_DEVICE: cpu
+      VOXTRAL_DTYPE: float32
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - models:/models
+    ports:
+      - "${VOXTRAL_PORT:-8087}:8082"
+    networks:
+      s2s:
+        aliases:
+          - voxtral-cpu
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/health', timeout=2)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 600s
+
+  # Local GGUF LLM via llama.cpp server (no Ollama). Granite 2B Q4 ~1.55 GB + short ctx.
+  llama:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.llama
+    image: ${LLAMA_IMAGE:-s2s-llama-granite:local}
+    container_name: s2s-llama-fallback
+    labels:
+      s2s.lab.managed: "true"
+      stage: llm
+      backend-id: local-fallback
+    profiles: ["fallback", "managed", "full"]
+    depends_on:
+      model-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *gpu-env
     ports:
       - "${LLAMA_PORT:-8081}:8081"
-    devices: *dri-devices
-    group_add:
-      - "${VIDEO_GID:-44}"
-      - "${RENDER_GID:-109}"
     command:
       - -m
-      - /models/llm/${LLAMA_MODEL_FILE:-qwen2.5-1.5b-instruct-q4_k_m.gguf}
+      - /opt/s2s-models/granite-3.3-2b-instruct-q4_k_m.gguf
       - --host
       - "0.0.0.0"
       - --port
       - "8081"
       - -ngl
-      - "${LLAMA_NGL:-999}"
+      - "${LLAMA_NGL:-0}"
       - -c
-      - "${LLAMA_CTX:-8192}"
+      # Short context keeps KV cache small on 8 GB cards (voice turns are short)
+      - "${LLAMA_CTX:-2048}"
+      - --alias
+      - ${S2S_LLM_MODEL:-granite-3.3-2b-instruct}
     networks:
-      - s2s
+      s2s:
+        aliases:
+          - llama-fallback
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8081/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
 
+  # Optional Qwen TTS — heavy VRAM (~3–4 GB). Prefer with TTS-only tests or 12+ GB GPUs.
+  # On 8 GB: stop other GPU users or set S2S_TTS=supertonic and leave this profile off.
   tts:
     build:
       context: .
       dockerfile: docker/Dockerfile.tts
     image: ${TTS_IMAGE:-s2s-tts-qwen:local}
-    container_name: s2s-tts
+    container_name: s2s-tts-qwen-vulkan
+    labels:
+      s2s.lab.managed: "true"
+      stage: tts
+      backend-id: qwen3-tts-0.6b
     profiles: ["tts", "full"]
     environment:
       <<: *gpu-env
@@ -183,13 +533,120 @@ services:
       - models:/models
     ports:
       - "${TTS_PORT:-8083}:8083"
-    devices: *dri-devices
-    group_add:
-      - "${VIDEO_GID:-44}"
-      - "${RENDER_GID:-109}"
     networks:
-      - s2s
+      s2s:
+        aliases:
+          - tts-qwen-vulkan
     restart: unless-stopped
+
+  kokoro:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.kokoro
+    image: ${KOKORO_IMAGE:-s2s-tts-kokoro:local}
+    container_name: s2s-tts-kokoro
+    profiles: ["managed", "full"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: tts
+      backend-id: kokoro
+    environment:
+      S2S_KOKORO_VOICE: ${S2S_KOKORO_VOICE:-af_bella}
+    volumes:
+      - models:/models
+    ports:
+      - "${KOKORO_PORT:-8084}:8084"
+    networks:
+      s2s:
+        aliases:
+          - tts-kokoro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8084/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 60s
+
+  # VibeVoice Realtime 0.5B GGUF via CrispASR (OpenAI /v1/audio/speech).
+  # Weights: Lab download vibevoice-realtime-0.5b (~780 MB with voice packs).
+  vibevoice:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.vibevoice
+    image: ${VIBEVOICE_IMAGE:-s2s-tts-vibevoice:local}
+    container_name: s2s-tts-vibevoice
+    profiles: ["managed", "vibevoice", "full"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: tts
+      backend-id: vibevoice-realtime-0.5b
+    environment:
+      VIBEVOICE_MODEL: /models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf
+      VIBEVOICE_VOICE: /models/vibevoice/vibevoice-voice-emma.gguf
+      VIBEVOICE_VOICE_DIR: /models/vibevoice
+      VIBEVOICE_PORT: "8089"
+      VIBEVOICE_NO_WATERMARK: "1"
+    volumes:
+      - models:/models
+    ports:
+      - "${VIBEVOICE_PORT:-8089}:8089"
+    networks:
+      s2s:
+        aliases:
+          - tts-vibevoice
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:8089/health || curl -fsS http://127.0.0.1:8089/v1/models",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+
+  # Optional Higgs TTS 3 4B — large VRAM (~24 GB+ practical). NVIDIA + SGLang-Omni.
+  # Weights: Lab download (higgs-tts-3-4b) or hf download bosonai/higgs-tts-3-4b
+  # Profile: managed (Lab hot-swap) or higgs.
+  higgs:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.higgs
+    image: ${HIGGS_IMAGE:-s2s-tts-higgs:local}
+    container_name: s2s-tts-higgs
+    profiles: ["managed", "higgs", "full"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: tts
+      backend-id: higgs-tts-3-4b
+    environment:
+      HIGGS_MODEL_PATH: ${HIGGS_MODEL_PATH:-/models/higgs-tts-3-4b}
+      HIGGS_PORT: "8086"
+      HIGGS_HOST: 0.0.0.0
+      HF_TOKEN: ${HF_TOKEN:-${S2S_HF_TOKEN:-}}
+      S2S_HF_TOKEN: ${S2S_HF_TOKEN:-${HF_TOKEN:-}}
+    volumes:
+      - models:/models
+    ports:
+      - "${HIGGS_PORT:-8086}:8086"
+    shm_size: "32gb"
+    networks:
+      s2s:
+        aliases:
+          - tts-higgs
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8086/v1/models', timeout=5)\" || curl -fsS http://127.0.0.1:8086/v1/models",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 300s
 
   # ── Optional fancy web test UI ─────────────────────────────────────
   # docker compose --profile web up -d --build
@@ -204,7 +661,7 @@ services:
     depends_on:
       - s2s
     ports:
-      - "${WEB_PORT:-8088}:80"
+      - "${S2S_BIND_HOST:-127.0.0.1}:${WEB_PORT:-8088}:80"
     networks:
       - s2s
     restart: unless-stopped
@@ -212,7 +669,12 @@ services:
 volumes:
   models:
     name: ${MODELS_VOLUME:-s2s-models}
+  lab-data:
+    name: ${LAB_DATA_VOLUME:-s2s-lab-data}
 
 networks:
   s2s:
     driver: bridge
+  s2s-control:
+    driver: bridge
+    internal: true

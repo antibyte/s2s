@@ -7,7 +7,6 @@ services:
       S2S_GPU: cpu
       GGML_BACKEND: CPU
       NVIDIA_VISIBLE_DEVICES: ""
-    gpus: null
     devices: []
     deploy:
       resources:

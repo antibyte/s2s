@@ -1,0 +1,1424 @@
+{
+  "schema_version": 1,
+  "backends": [
+    {
+      "id": "fw-tiny",
+      "stage": "asr",
+      "name": "faster-whisper tiny",
+      "tag": "fast",
+      "description": "Sehr niedrige Latenz bei reduziertem Speicherbedarf.",
+      "protocol": "faster-whisper",
+      "model": "tiny",
+      "languages": [
+        "auto",
+        "de",
+        "en"
+      ],
+      "resources": {
+        "vram_gb": 0.25,
+        "ram_gb": 1.0,
+        "stars": {
+          "cpu": 2,
+          "gpu": 1,
+          "vram": 1
+        }
+      },
+      "bundled": true,
+      "variants": [
+        {
+          "id": "fw-tiny-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://whisper-tiny:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "s2s-whisper-tiny",
+          "image": "s2s-whisper-fw:local",
+          "health_path": "/",
+          "environment": {
+            "S2S_WHISPER_MODEL": "/opt/s2s-models/faster-whisper-tiny",
+            "S2S_WHISPER_DEVICE": "cuda"
+          }
+        },
+        {
+          "id": "fw-tiny-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://whisper-tiny:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "s2s-whisper-tiny",
+          "image": "s2s-whisper-fw:local",
+          "health_path": "/",
+          "environment": {
+            "S2S_WHISPER_MODEL": "/opt/s2s-models/faster-whisper-tiny",
+            "S2S_WHISPER_DEVICE": "cpu"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fw-base",
+      "stage": "asr",
+      "name": "faster-whisper base",
+      "tag": "balanced",
+      "description": "Kompakte mehrsprachige ASR für kleine Systeme.",
+      "protocol": "faster-whisper",
+      "model": "base",
+      "languages": [
+        "auto",
+        "de",
+        "en"
+      ],
+      "resources": {
+        "vram_gb": 0.5,
+        "ram_gb": 1.5,
+        "stars": {
+          "cpu": 2,
+          "gpu": 2,
+          "vram": 1
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/Systran/faster-whisper-base/resolve/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/config.json?download=true",
+          "path": "faster-whisper/base/config.json",
+          "size": 2309
+        },
+        {
+          "source": "https://huggingface.co/Systran/faster-whisper-base/resolve/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/model.bin?download=true",
+          "path": "faster-whisper/base/model.bin",
+          "sha256": "d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9",
+          "size": 145217532
+        },
+        {
+          "source": "https://huggingface.co/Systran/faster-whisper-base/resolve/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/tokenizer.json?download=true",
+          "path": "faster-whisper/base/tokenizer.json",
+          "size": 2203239
+        },
+        {
+          "source": "https://huggingface.co/Systran/faster-whisper-base/resolve/ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66/vocabulary.txt?download=true",
+          "path": "faster-whisper/base/vocabulary.txt",
+          "size": 459861
+        }
+      ],
+      "variants": [
+        {
+          "id": "fw-base-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://whisper-base:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "s2s-whisper-base",
+          "image": "s2s-whisper-fw:local",
+          "health_path": "/",
+          "environment": {
+            "S2S_WHISPER_MODEL": "/models/faster-whisper/base",
+            "S2S_WHISPER_DEVICE": "cuda"
+          }
+        },
+        {
+          "id": "fw-base-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://whisper-base:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "s2s-whisper-base",
+          "image": "s2s-whisper-fw:local",
+          "health_path": "/",
+          "environment": {
+            "S2S_WHISPER_MODEL": "/models/faster-whisper/base",
+            "S2S_WHISPER_DEVICE": "cpu"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fw-small",
+      "stage": "asr",
+      "name": "faster-whisper small",
+      "tag": "quality",
+      "description": "Gute deutsche Erkennung und stabil auf kurzen Sprachsegmenten.",
+      "protocol": "faster-whisper",
+      "model": "small",
+      "languages": [
+        "auto",
+        "de",
+        "en"
+      ],
+      "resources": {
+        "vram_gb": 0.8,
+        "ram_gb": 2.0,
+        "stars": {
+          "cpu": 2,
+          "gpu": 2,
+          "vram": 2
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/Systran/faster-whisper-small/resolve/536b0662742c02347bc0e980a01041f333bce120/config.json?download=true",
+          "path": "faster-whisper/small/config.json",
+          "size": 2370
+        },
+        {
+          "source": "https://huggingface.co/Systran/faster-whisper-small/resolve/536b0662742c02347bc0e980a01041f333bce120/model.bin?download=true",
+          "path": "faster-whisper/small/model.bin",
+          "sha256": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671",
+          "size": 483546902
+        },
+        {
+          "source": "https://huggingface.co/Systran/faster-whisper-small/resolve/536b0662742c02347bc0e980a01041f333bce120/tokenizer.json?download=true",
+          "path": "faster-whisper/small/tokenizer.json",
+          "size": 2203239
+        },
+        {
+          "source": "https://huggingface.co/Systran/faster-whisper-small/resolve/536b0662742c02347bc0e980a01041f333bce120/vocabulary.txt?download=true",
+          "path": "faster-whisper/small/vocabulary.txt",
+          "size": 459861
+        }
+      ],
+      "variants": [
+        {
+          "id": "fw-small-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://whisper-small:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "s2s-whisper-small",
+          "image": "s2s-whisper-fw:local",
+          "health_path": "/",
+          "environment": {
+            "S2S_WHISPER_MODEL": "/models/faster-whisper/small",
+            "S2S_WHISPER_DEVICE": "cuda"
+          }
+        },
+        {
+          "id": "fw-small-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://whisper-small:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "s2s-whisper-small",
+          "image": "s2s-whisper-fw:local",
+          "health_path": "/",
+          "environment": {
+            "S2S_WHISPER_MODEL": "/models/faster-whisper/small",
+            "S2S_WHISPER_DEVICE": "cpu"
+          }
+        }
+      ]
+    },
+    {
+      "id": "parakeet-tdt-0.6b-v3",
+      "stage": "asr",
+      "name": "NVIDIA Parakeet TDT 0.6B v3",
+      "tag": "multilingual",
+      "description": "Schnelle FastConformer-TDT-ASR mit automatischer Erkennung von 25 europäischen Sprachen.",
+      "protocol": "parakeet",
+      "model": "nvidia/parakeet-tdt-0.6b-v3",
+      "languages": [
+        "auto",
+        "bg",
+        "hr",
+        "cs",
+        "da",
+        "nl",
+        "en",
+        "et",
+        "fi",
+        "fr",
+        "de",
+        "el",
+        "hu",
+        "it",
+        "lv",
+        "lt",
+        "mt",
+        "pl",
+        "pt",
+        "ro",
+        "sk",
+        "sl",
+        "es",
+        "sv",
+        "ru",
+        "uk"
+      ],
+      "resources": {
+        "vram_gb": 3.5,
+        "ram_gb": 5.0,
+        "stars": {
+          "cpu": 2,
+          "gpu": 3,
+          "vram": 3
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/7c35754d166cca382ad1e53e68b01e7c575f3a1d/config.json?download=true",
+          "path": "parakeet-tdt-0.6b-v3/config.json",
+          "sha256": "e747b85e1bdfd300c8b8ac63bac8dd5221f8fe9bc275b48d06c735fcd6971b6e",
+          "size": 1153
+        },
+        {
+          "source": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/7c35754d166cca382ad1e53e68b01e7c575f3a1d/generation_config.json?download=true",
+          "path": "parakeet-tdt-0.6b-v3/generation_config.json",
+          "sha256": "b141de6ec6d7f982ece13f98f604e3fe1807ea9c0e839185d0ab7064604209d0",
+          "size": 289
+        },
+        {
+          "source": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/7c35754d166cca382ad1e53e68b01e7c575f3a1d/model.safetensors?download=true",
+          "path": "parakeet-tdt-0.6b-v3/model.safetensors",
+          "sha256": "3a2026366188c8c68598edbbff92f8d11590a08e0ae2e6775544e7b07d6a5e11",
+          "size": 2508311120
+        },
+        {
+          "source": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/7c35754d166cca382ad1e53e68b01e7c575f3a1d/processor_config.json?download=true",
+          "path": "parakeet-tdt-0.6b-v3/processor_config.json",
+          "sha256": "8346a93a3b987fa1dec57a78f045cd0817d21786589a5a096b41a57a446fd1d7",
+          "size": 392
+        },
+        {
+          "source": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/7c35754d166cca382ad1e53e68b01e7c575f3a1d/tokenizer_config.json?download=true",
+          "path": "parakeet-tdt-0.6b-v3/tokenizer_config.json",
+          "sha256": "0b2fe0037599ee335f0b972fa682bf0ece74e4ccfec755cb7daa3405d3d3e874",
+          "size": 290
+        },
+        {
+          "source": "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/7c35754d166cca382ad1e53e68b01e7c575f3a1d/tokenizer.json?download=true",
+          "path": "parakeet-tdt-0.6b-v3/tokenizer.json",
+          "sha256": "bd321b096832a3f270bd3b2a88823957920f1a5c5ada71114a26ea729d0cbe91",
+          "size": 1159960
+        }
+      ],
+      "variants": [
+        {
+          "id": "parakeet-tdt-0.6b-v3-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://parakeet-cuda:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "s2s-parakeet-cuda",
+          "image": "s2s-asr-parakeet:cuda",
+          "health_path": "/health",
+          "environment": {
+            "PARAKEET_MODEL_DIR": "/models/parakeet-tdt-0.6b-v3",
+            "PARAKEET_DEVICE": "cuda",
+            "PARAKEET_DTYPE": "float16"
+          }
+        },
+        {
+          "id": "parakeet-tdt-0.6b-v3-xpu",
+          "accelerator": "sycl",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "linux"
+          ],
+          "stable": false,
+          "endpoint": "http://parakeet-xpu:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "s2s-parakeet-xpu",
+          "image": "s2s-asr-parakeet:xpu",
+          "health_path": "/health",
+          "environment": {
+            "PARAKEET_MODEL_DIR": "/models/parakeet-tdt-0.6b-v3",
+            "PARAKEET_DEVICE": "xpu",
+            "PARAKEET_DTYPE": "bfloat16"
+          }
+        },
+        {
+          "id": "parakeet-tdt-0.6b-v3-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://parakeet-cpu:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "s2s-parakeet-cpu",
+          "image": "s2s-asr-parakeet:cpu",
+          "health_path": "/health",
+          "environment": {
+            "PARAKEET_MODEL_DIR": "/models/parakeet-tdt-0.6b-v3",
+            "PARAKEET_DEVICE": "cpu",
+            "PARAKEET_DTYPE": "float32"
+          }
+        }
+      ]
+    },
+    {
+      "id": "voxtral-mini-4b-realtime",
+      "stage": "asr",
+      "name": "Voxtral Mini 4B Realtime",
+      "tag": "realtime",
+      "description": "Mistral Voxtral Mini 4B Realtime 2602 — multilingual streaming ASR (~13 languages, <500 ms delay). Lab sidecar uses Transformers batch /inference for VAD clips; production path is vLLM realtime. Needs ~16 GB NVIDIA VRAM (BF16).",
+      "protocol": "voxtral",
+      "model": "mistralai/Voxtral-Mini-4B-Realtime-2602",
+      "languages": [
+        "auto",
+        "ar",
+        "de",
+        "en",
+        "es",
+        "fr",
+        "hi",
+        "it",
+        "nl",
+        "pt",
+        "zh",
+        "ja",
+        "ko",
+        "ru"
+      ],
+      "resources": {
+        "vram_gb": 16.0,
+        "ram_gb": 12.0,
+        "stars": {
+          "cpu": 3,
+          "gpu": 4,
+          "vram": 4
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602/resolve/main/config.json?download=true",
+          "path": "voxtral-mini-4b-realtime/config.json",
+          "size": 1572
+        },
+        {
+          "source": "https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602/resolve/main/generation_config.json?download=true",
+          "path": "voxtral-mini-4b-realtime/generation_config.json",
+          "size": 191
+        },
+        {
+          "source": "https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602/resolve/main/params.json?download=true",
+          "path": "voxtral-mini-4b-realtime/params.json",
+          "size": 1343
+        },
+        {
+          "source": "https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602/resolve/main/processor_config.json?download=true",
+          "path": "voxtral-mini-4b-realtime/processor_config.json",
+          "size": 384
+        },
+        {
+          "source": "https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602/resolve/main/tekken.json?download=true",
+          "path": "voxtral-mini-4b-realtime/tekken.json",
+          "sha256": "8434af1d39eba99f0ef46cf1450bf1a63fa941a26933a1ef5dbbf4adf0d00e44",
+          "size": 14910348
+        },
+        {
+          "source": "https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602/resolve/main/model.safetensors?download=true",
+          "path": "voxtral-mini-4b-realtime/model.safetensors",
+          "sha256": "e745e4902df6a4c48f29f2f8dc1f6d0fb4cc73c7156bc45923451a5bcdfcd1d6",
+          "size": 8859446848
+        }
+      ],
+      "variants": [
+        {
+          "id": "voxtral-mini-4b-realtime-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://voxtral-cuda:8082",
+          "native_endpoint": "http://127.0.0.1:8087",
+          "container": "s2s-voxtral-cuda",
+          "image": "s2s-asr-voxtral:cuda",
+          "health_path": "/health",
+          "environment": {
+            "VOXTRAL_MODEL_DIR": "/models/voxtral-mini-4b-realtime",
+            "VOXTRAL_DEVICE": "cuda",
+            "VOXTRAL_DTYPE": "bfloat16"
+          }
+        },
+        {
+          "id": "voxtral-mini-4b-realtime-host",
+          "accelerator": "remote",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://host.docker.internal:8087",
+          "native_endpoint": "http://127.0.0.1:8087",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {}
+        },
+        {
+          "id": "voxtral-mini-4b-realtime-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://voxtral-cpu:8082",
+          "native_endpoint": "http://127.0.0.1:8087",
+          "container": "s2s-voxtral-cpu",
+          "image": "s2s-asr-voxtral:cpu",
+          "health_path": "/health",
+          "environment": {
+            "VOXTRAL_MODEL_DIR": "/models/voxtral-mini-4b-realtime",
+            "VOXTRAL_DEVICE": "cpu",
+            "VOXTRAL_DTYPE": "float32"
+          }
+        }
+      ]
+    },
+    {
+      "id": "wcpp-base",
+      "stage": "asr",
+      "name": "whisper.cpp base",
+      "tag": "vulkan",
+      "description": "GGML-ASR mit Vulkan- oder CUDA-Backend.",
+      "protocol": "whisper-cpp",
+      "model": "ggml-base.bin",
+      "languages": [
+        "auto",
+        "de",
+        "en"
+      ],
+      "resources": {
+        "vram_gb": 0.6,
+        "ram_gb": 1.0,
+        "stars": {
+          "cpu": 2,
+          "gpu": 2,
+          "vram": 2
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin?download=true",
+          "path": "whisper/ggml-base.bin",
+          "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+          "size": 147951465
+        }
+      ],
+      "variants": [
+        {
+          "id": "wcpp-base-vulkan",
+          "accelerator": "vulkan",
+          "vendors": [
+            "amd",
+            "intel",
+            "nvidia"
+          ],
+          "platforms": [
+            "linux"
+          ],
+          "stable": false,
+          "endpoint": "http://whisper-cpp:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "s2s-whisper-cpp",
+          "image": "s2s-whisper-cpp-vulkan:local",
+          "health_path": "/",
+          "environment": {
+            "GGML_BACKEND": "Vulkan0"
+          }
+        },
+        {
+          "id": "wcpp-base-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://whisper-cpp:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "s2s-whisper-cpp",
+          "image": "s2s-whisper-cpp-cuda:local",
+          "health_path": "/",
+          "environment": {
+            "GGML_BACKEND": "CUDA0"
+          }
+        }
+      ]
+    },
+    {
+      "id": "supertonic",
+      "stage": "tts",
+      "name": "Supertonic ONNX",
+      "tag": "cpu",
+      "description": "Schnelle CPU-TTS mit geringem GPU-Speicherbedarf.",
+      "protocol": "openai-tts",
+      "model": "supertonic",
+      "default_voice": "M1",
+      "native_sample_rate": 44100,
+      "languages": [
+        "de",
+        "en",
+        "fr",
+        "es",
+        "pt",
+        "na"
+      ],
+      "resources": {
+        "vram_gb": 0.0,
+        "ram_gb": 2.0,
+        "stars": {
+          "cpu": 3,
+          "gpu": 1,
+          "vram": 1
+        }
+      },
+      "bundled": true,
+      "variants": [
+        {
+          "id": "supertonic-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://supertonic:8083/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8085/v1/audio/speech",
+          "container": "s2s-supertonic",
+          "image": "s2s-vulkan:local",
+          "health_path": "/health",
+          "environment": {}
+        }
+      ]
+    },
+    {
+      "id": "qwen3-tts-0.6b",
+      "stage": "tts",
+      "name": "Qwen3-TTS 0.6B",
+      "tag": "quality",
+      "description": "Mehrsprachige hochwertige TTS; Intel Arc verwendet SYCL.",
+      "protocol": "openai-tts-pcm",
+      "model": "qwen3-tts-sycl",
+      "default_voice": "Aiden",
+      "voices": [
+        "Aiden",
+        "Serena",
+        "Vivian",
+        "Uncle_Fu",
+        "Ryan",
+        "Ono_Anna",
+        "Sohee",
+        "Eric",
+        "Dylan"
+      ],
+      "native_sample_rate": 24000,
+      "languages": [
+        "auto",
+        "de",
+        "en",
+        "fr",
+        "es",
+        "it",
+        "pt",
+        "ru",
+        "ja",
+        "ko",
+        "zh"
+      ],
+      "resources": {
+        "vram_gb": 1.5,
+        "ram_gb": 2.0,
+        "stars": {
+          "cpu": 2,
+          "gpu": 3,
+          "vram": 3
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/e0f336a048a3de02b29b8ad92969217d9ecffe3e/qwen-talker-0.6b-customvoice-Q4_K_M.gguf?download=true",
+          "path": "qwen/qwen-talker-0.6b-customvoice-Q4_K_M.gguf",
+          "sha256": "b3a7e6613d80f8a703c06267fc1e94d48ce91932ab82ab6e31c50f4ca4868e1e",
+          "size": 604878080
+        },
+        {
+          "source": "https://huggingface.co/Serveurperso/Qwen3-TTS-GGUF/resolve/e0f336a048a3de02b29b8ad92969217d9ecffe3e/qwen-tokenizer-12hz-Q8_0.gguf?download=true",
+          "path": "qwen/qwen-tokenizer-12hz-Q8_0.gguf",
+          "sha256": "1883beeed99348fc35e23dd225e9082f93f6f8c109330a33d935baa8acdbfd94",
+          "size": 291150624
+        }
+      ],
+      "variants": [
+        {
+          "id": "qwen3-tts-b580-sycl-aot",
+          "accelerator": "sycl",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "linux"
+          ],
+          "stable": true,
+          "device_match": [
+            "b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://tts-qwen-sycl-aot:8083/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8083/v1/audio/speech",
+          "container": "s2s-tts-qwen-sycl-aot",
+          "image": "s2s-tts-qwen-sycl:b580",
+          "health_path": "/health",
+          "environment": {
+            "GGML_BACKEND": "SYCL0",
+            "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu",
+            "QWEN_CODE_SAMPLER": "host"
+          }
+        },
+        {
+          "id": "qwen3-tts-sycl-jit",
+          "accelerator": "sycl",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "linux"
+          ],
+          "stable": true,
+          "endpoint": "http://tts-qwen-sycl-jit:8083/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8083/v1/audio/speech",
+          "container": "s2s-tts-qwen-sycl-jit",
+          "image": "s2s-tts-qwen-sycl:portable",
+          "health_path": "/health",
+          "environment": {
+            "GGML_BACKEND": "SYCL0",
+            "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu",
+            "QWEN_CODE_SAMPLER": "host"
+          }
+        },
+        {
+          "id": "qwen3-tts-vulkan",
+          "accelerator": "vulkan",
+          "vendors": [
+            "amd",
+            "nvidia"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://tts-qwen-vulkan:8083/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8083/v1/audio/speech",
+          "container": "s2s-tts-qwen-vulkan",
+          "image": "s2s-tts-qwen-vulkan:local",
+          "health_path": "/health",
+          "environment": {
+            "GGML_BACKEND": "Vulkan0",
+            "QWEN_CODE_SAMPLER": "host"
+          }
+        },
+        {
+          "id": "qwen3-tts-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://tts-qwen-cuda:8083/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8083/v1/audio/speech",
+          "container": "s2s-tts-qwen-cuda",
+          "image": "s2s-tts-qwen-cuda:local",
+          "health_path": "/health",
+          "environment": {
+            "GGML_BACKEND": "CUDA0",
+            "QWEN_CODE_SAMPLER": "host"
+          }
+        },
+        {
+          "id": "qwen3-tts-sycl-windows-experimental",
+          "accelerator": "sycl",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://host.docker.internal:8083/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8083/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {
+            "QWEN_CODE_SAMPLER": "host"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kokoro",
+      "stage": "tts",
+      "name": "Kokoro 82M",
+      "tag": "compact",
+      "description": "Kompakte OpenAI-kompatible TTS, primär für englische Stimmen.",
+      "protocol": "openai-tts",
+      "model": "kokoro",
+      "default_voice": "af_bella",
+      "native_sample_rate": 24000,
+      "languages": [
+        "en"
+      ],
+      "resources": {
+        "vram_gb": 0.0,
+        "ram_gb": 1.5,
+        "stars": {
+          "cpu": 3,
+          "gpu": 1,
+          "vram": 1
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx",
+          "path": "kokoro/kokoro-v1.0.onnx",
+          "size": 325532387
+        },
+        {
+          "source": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
+          "path": "kokoro/voices-v1.0.bin",
+          "size": 28214398
+        }
+      ],
+      "variants": [
+        {
+          "id": "kokoro-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://tts-kokoro:8084/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8084/v1/audio/speech",
+          "container": "s2s-tts-kokoro",
+          "image": "s2s-tts-kokoro:local",
+          "health_path": "/health",
+          "environment": {}
+        }
+      ]
+    },
+    {
+      "id": "vibevoice-realtime-0.5b",
+      "stage": "tts",
+      "name": "VibeVoice Realtime 0.5B",
+      "tag": "realtime",
+      "description": "Microsoft VibeVoice-Realtime-0.5B (GGUF via CrispASR): low-latency streaming TTS with preset voice packs (EN/DE/FR/…). Q4_K ~700 MB + voice packs. Serves OpenAI /v1/audio/speech on port 8089.",
+      "protocol": "openai-tts",
+      "model": "vibevoice-realtime-0.5b",
+      "default_voice": "emma",
+      "voices": [
+        "emma",
+        "en-Emma_woman",
+        "en-Carter_man",
+        "en-Davis_man",
+        "en-Frank_man",
+        "en-Grace_woman",
+        "en-Mike_man",
+        "de-Spk0_man",
+        "de-Spk1_woman",
+        "fr-Spk0_man",
+        "fr-Spk1_woman",
+        "in-Samuel_man",
+        "it-Spk0_woman",
+        "it-Spk1_man",
+        "jp-Spk0_man",
+        "jp-Spk1_woman",
+        "kr-Spk0_woman",
+        "kr-Spk1_man",
+        "nl-Spk0_man",
+        "nl-Spk1_woman",
+        "pl-Spk0_man",
+        "pl-Spk1_woman",
+        "pt-Spk0_woman",
+        "pt-Spk1_man",
+        "sp-Spk0_woman",
+        "sp-Spk1_man"
+      ],
+      "native_sample_rate": 24000,
+      "languages": [
+        "en",
+        "de",
+        "fr",
+        "es",
+        "it",
+        "pt",
+        "nl",
+        "pl",
+        "ja",
+        "ko",
+        "hi"
+      ],
+      "resources": {
+        "vram_gb": 1.0,
+        "ram_gb": 2.0,
+        "stars": {
+          "cpu": 3,
+          "gpu": 2,
+          "vram": 2
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-realtime-0.5b-q4_k.gguf?download=true",
+          "path": "vibevoice/vibevoice-realtime-0.5b-q4_k.gguf",
+          "sha256": "483e1922a9077e3fc66b7947a4d6fee3dfd8edc30afde3410efa5bb386bc0392",
+          "size": 698629312
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-emma.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-emma.gguf",
+          "sha256": "4a2e1b0db22e9d1aec0b52b434c108743af629d9def1d7f2d986f55b9f6011e6",
+          "size": 2740832
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-en-Emma_woman.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-en-Emma_woman.gguf",
+          "sha256": "4a2e1b0db22e9d1aec0b52b434c108743af629d9def1d7f2d986f55b9f6011e6",
+          "size": 2740832
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-en-Carter_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-en-Carter_man.gguf",
+          "sha256": "c6daf28153adeaafa318646f92d3d3eb6273030fe6670f4d1669287b494efb1b",
+          "size": 3476064
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-en-Davis_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-en-Davis_man.gguf",
+          "sha256": "8368e08db8344c092e156f248ad9cabde24dde56d88c8aec7bbaff69edc5348c",
+          "size": 2015840
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-en-Frank_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-en-Frank_man.gguf",
+          "sha256": "7d6656143cbde96841beeb87cda4a40135f2441b76a5aac01a868e9ca5185786",
+          "size": 2757216
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-en-Grace_woman.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-en-Grace_woman.gguf",
+          "sha256": "3d4be3904c7e76e5f150589ee7521e24974d2c4fd86079924ee9e6a31d0134f5",
+          "size": 2275936
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-en-Mike_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-en-Mike_man.gguf",
+          "sha256": "5a4c39ed8e5af33a353b6939222e21e016c495eeafe2fafbfbe0260be76ccfd4",
+          "size": 1634912
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-de-Spk0_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-de-Spk0_man.gguf",
+          "sha256": "e3a8959895615f0c81affa0bef77829b55118930cd40cd21e096e439598ffe75",
+          "size": 5698144
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-de-Spk1_woman.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-de-Spk1_woman.gguf",
+          "sha256": "3cd2e57098a98f47f49a34e4b894d564cd57b64b687ce153eb2137bd25dfbadf",
+          "size": 4321888
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-fr-Spk0_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-fr-Spk0_man.gguf",
+          "sha256": "e0623b9bae015a158611a9e9b29917d656e12f33d5bf6bc8fc138101be7607ad",
+          "size": 3568224
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-fr-Spk1_woman.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-fr-Spk1_woman.gguf",
+          "sha256": "794fbbb36a0dd01097d0805c91fa301e3efade46750ff3b7d2be57bd581fbe80",
+          "size": 3453536
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-in-Samuel_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-in-Samuel_man.gguf",
+          "sha256": "8286c88a98e5a3b294e597c7a563a873674b288b763a9ac0d778ce6aaf638e0c",
+          "size": 3101280
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-it-Spk0_woman.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-it-Spk0_woman.gguf",
+          "sha256": "4d6f91e829af1c25d3ee5f2178c9b6a099b3d874b7d9b0b63611b131fe6f0830",
+          "size": 2081376
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-it-Spk1_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-it-Spk1_man.gguf",
+          "sha256": "f23ce23af3720353814ceae50dda5826c1a8483c5d4311d8a710343e9aee9665",
+          "size": 2323040
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-jp-Spk0_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-jp-Spk0_man.gguf",
+          "sha256": "27217e5f995ddb3757d2b9e87ddb7d17a5bf521f0b3fdd032d3a98637510f680",
+          "size": 3787360
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-jp-Spk1_woman.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-jp-Spk1_woman.gguf",
+          "sha256": "f3b0da1df5d83ed4246a97d34287dcff17cb85b62c485f189ca4e2143d5e30b0",
+          "size": 3770976
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-kr-Spk0_woman.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-kr-Spk0_woman.gguf",
+          "sha256": "8fb1190d9e1b1f42e4b72a638c8044eda2591ce1070ad7a414959ce8e6cc35f1",
+          "size": 3367520
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-kr-Spk1_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-kr-Spk1_man.gguf",
+          "sha256": "41814dff4b1b5d724c770802771d037a5e6b6953b424703da0c5d6589fc6d59c",
+          "size": 4731488
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-nl-Spk0_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-nl-Spk0_man.gguf",
+          "sha256": "d5edeae3bae0d1c19d60f0c40006cccc89f71ad63c7531521d54186319eb47a4",
+          "size": 2986592
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-nl-Spk1_woman.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-nl-Spk1_woman.gguf",
+          "sha256": "fca6e591d191d4c1aefad23d8ed3a34824c40ae9c019adb220d1630cece18769",
+          "size": 4137568
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-pl-Spk0_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-pl-Spk0_man.gguf",
+          "sha256": "36a4595ca35694ab788d826777804ed3d03ffbef5a94b594f9485e86280f1b25",
+          "size": 3041888
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-pl-Spk1_woman.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-pl-Spk1_woman.gguf",
+          "sha256": "794d0abbf2b44a15f36f8a3d79be776b83a74e2b03e8ddb94cd976e6c07d249a",
+          "size": 4059744
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-pt-Spk0_woman.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-pt-Spk0_woman.gguf",
+          "sha256": "f58af0ef6495f15a9f7cb92c0f7e662b58cfdbf5f4b950cb906a11bc268fd729",
+          "size": 1845856
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-pt-Spk1_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-pt-Spk1_man.gguf",
+          "sha256": "37130fd4059951849f89813b392867ea3f51958b808a86d7dc80161ebf8a219a",
+          "size": 2880096
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-sp-Spk0_woman.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-sp-Spk0_woman.gguf",
+          "sha256": "fed6bdd8c3e9707adcc2f2a1890544daede8bf67b2f9bf52aeacb91d6d482bee",
+          "size": 3457632
+        },
+        {
+          "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-sp-Spk1_man.gguf?download=true",
+          "path": "vibevoice/vibevoice-voice-sp-Spk1_man.gguf",
+          "sha256": "35e151a874e27e197b6785615b797015b35f95f603c4cb8f6f86c5e76ed1bab4",
+          "size": 4186720
+        }
+      ],
+      "variants": [
+        {
+          "id": "vibevoice-realtime-0.5b-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://tts-vibevoice:8089/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8089/v1/audio/speech",
+          "container": "s2s-tts-vibevoice",
+          "image": "s2s-tts-vibevoice:local",
+          "health_path": "/health",
+          "environment": {
+            "VIBEVOICE_MODEL": "/models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf",
+            "VIBEVOICE_VOICE": "/models/vibevoice/vibevoice-voice-emma.gguf",
+            "VIBEVOICE_VOICE_DIR": "/models/vibevoice",
+            "VIBEVOICE_PORT": "8089"
+          }
+        },
+        {
+          "id": "vibevoice-realtime-0.5b-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://tts-vibevoice-cuda:8089/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8089/v1/audio/speech",
+          "container": "s2s-tts-vibevoice-cuda",
+          "image": "s2s-tts-vibevoice:cuda",
+          "health_path": "/health",
+          "environment": {
+            "VIBEVOICE_MODEL": "/models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf",
+            "VIBEVOICE_VOICE": "/models/vibevoice/vibevoice-voice-emma.gguf",
+            "VIBEVOICE_VOICE_DIR": "/models/vibevoice",
+            "VIBEVOICE_PORT": "8089"
+          }
+        },
+        {
+          "id": "vibevoice-realtime-0.5b-host",
+          "accelerator": "remote",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://host.docker.internal:8089/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8089/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {}
+        }
+      ]
+    },
+    {
+      "id": "higgs-tts-3-4b",
+      "stage": "tts",
+      "name": "Higgs TTS 3 4B",
+      "tag": "expressive",
+      "description": "Boson Higgs TTS 3 (~4B): expressive conversational speech, 100+ languages, zero-shot cloning via SGLang-Omni. NVIDIA CUDA preferred; on Intel/AMD lab hosts use host server on :8086 (scripts/start_higgs.ps1). Research/non-commercial license; ~24 GB+ VRAM practical.",
+      "protocol": "openai-tts",
+      "model": "bosonai/higgs-tts-3-4b",
+      "default_voice": "default",
+      "voices": [
+        "default"
+      ],
+      "native_sample_rate": 24000,
+      "languages": [
+        "auto",
+        "en",
+        "de",
+        "fr",
+        "es",
+        "it",
+        "pt",
+        "ru",
+        "ja",
+        "ko",
+        "zh",
+        "ar",
+        "hi",
+        "nl",
+        "pl",
+        "tr",
+        "vi"
+      ],
+      "resources": {
+        "vram_gb": 24.0,
+        "ram_gb": 16.0,
+        "stars": {
+          "cpu": 2,
+          "gpu": 5,
+          "vram": 5
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/bosonai/higgs-tts-3-4b/resolve/main/config.json?download=true",
+          "path": "higgs-tts-3-4b/config.json",
+          "size": 2755
+        },
+        {
+          "source": "https://huggingface.co/bosonai/higgs-tts-3-4b/resolve/main/model.safetensors?download=true",
+          "path": "higgs-tts-3-4b/model.safetensors",
+          "sha256": "2f7965264c360b38180885006944aa16bd1de20f4e6cff79f6473bfcf8ae3d5a",
+          "size": 9309834930
+        },
+        {
+          "source": "https://huggingface.co/bosonai/higgs-tts-3-4b/resolve/main/tokenizer.json?download=true",
+          "path": "higgs-tts-3-4b/tokenizer.json",
+          "sha256": "eb883de2de5adc5113f1f02b54830a0ea7cd6ef191cde65c41aceb3737d4d1c1",
+          "size": 11433924
+        },
+        {
+          "source": "https://huggingface.co/bosonai/higgs-tts-3-4b/resolve/main/tokenizer_config.json?download=true",
+          "path": "higgs-tts-3-4b/tokenizer_config.json",
+          "size": 1937
+        },
+        {
+          "source": "https://huggingface.co/bosonai/higgs-tts-3-4b/resolve/main/chat_template.jinja?download=true",
+          "path": "higgs-tts-3-4b/chat_template.jinja",
+          "size": 2427
+        }
+      ],
+      "variants": [
+        {
+          "id": "higgs-tts-3-4b-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://tts-higgs:8086/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8086/v1/audio/speech",
+          "container": "s2s-tts-higgs",
+          "image": "s2s-tts-higgs:local",
+          "health_path": "/v1/models",
+          "environment": {
+            "HIGGS_MODEL_PATH": "/models/higgs-tts-3-4b",
+            "HIGGS_PORT": "8086"
+          }
+        },
+        {
+          "id": "higgs-tts-3-4b-host",
+          "accelerator": "remote",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://host.docker.internal:8086/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8086/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/v1/models",
+          "environment": {}
+        }
+      ]
+    },
+    {
+      "id": "external-openai",
+      "stage": "llm",
+      "name": "External OpenAI-compatible LLM",
+      "tag": "preferred",
+      "description": "Vom Nutzer konfigurierter externer LLM-Endpunkt.",
+      "protocol": "openai-chat",
+      "model": "external",
+      "languages": [
+        "auto"
+      ],
+      "resources": {
+        "vram_gb": 0.0,
+        "ram_gb": 0.0,
+        "stars": {
+          "cpu": 1,
+          "gpu": 1,
+          "vram": 1
+        }
+      },
+      "bundled": true,
+      "variants": [
+        {
+          "id": "external-openai-http",
+          "accelerator": "remote",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "",
+          "native_endpoint": "",
+          "container": "",
+          "image": "",
+          "health_path": "/models",
+          "environment": {}
+        }
+      ]
+    },
+    {
+      "id": "local-fallback",
+      "stage": "llm",
+      "name": "Granite 3.3 2B Q4",
+      "tag": "included",
+      "description": "Gebündeltes lokales llama.cpp-Modell; sofort verfügbar und als Startmodell ausgewählt.",
+      "protocol": "openai-chat",
+      "model": "granite-3.3-2b-instruct",
+      "languages": [
+        "auto"
+      ],
+      "resources": {
+        "vram_gb": 2.0,
+        "ram_gb": 2.5,
+        "stars": {
+          "cpu": 2,
+          "gpu": 3,
+          "vram": 3
+        }
+      },
+      "bundled": true,
+      "variants": [
+        {
+          "id": "local-fallback-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://llama-fallback:8081/v1",
+          "native_endpoint": "http://127.0.0.1:8081/v1",
+          "container": "s2s-llama-fallback",
+          "image": "s2s-llama-granite-cuda:local",
+          "health_path": "/v1/models",
+          "environment": {
+            "GGML_BACKEND": "CUDA0"
+          }
+        },
+        {
+          "id": "local-fallback-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux",
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://llama-fallback:8081/v1",
+          "native_endpoint": "http://127.0.0.1:8081/v1",
+          "container": "s2s-llama-fallback",
+          "image": "s2s-llama-granite:local",
+          "health_path": "/v1/models",
+          "environment": {
+            "GGML_BACKEND": "CPU"
+          }
+        }
+      ]
+    }
+  ],
+  "presets": [
+    {
+      "id": "balanced",
+      "name": "Sofort startklar",
+      "asr_id": "fw-tiny",
+      "tts_id": "supertonic",
+      "llm_id": "local-fallback"
+    },
+    {
+      "id": "quality-intel",
+      "name": "Quality Intel",
+      "asr_id": "fw-small",
+      "tts_id": "qwen3-tts-0.6b",
+      "llm_id": "local-fallback"
+    },
+    {
+      "id": "minimal",
+      "name": "Minimal",
+      "asr_id": "fw-tiny",
+      "tts_id": "supertonic",
+      "llm_id": "local-fallback"
+    }
+  ]
+}

@@ -25,7 +25,131 @@ services:
               count: all
               capabilities: [gpu, utility, compute, graphics]
 
+  whisper-tiny:
+    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility, compute]
+
+  whisper-small:
+    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility, compute]
+
+  parakeet-cuda:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.parakeet
+      args:
+        TORCH_VERSION: ${PARAKEET_TORCH_VERSION:-2.11.0}
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu130
+    image: ${PARAKEET_CUDA_IMAGE:-s2s-asr-parakeet:cuda}
+    container_name: s2s-parakeet-cuda
+    profiles: ["managed"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: asr
+      backend-id: parakeet-tdt-0.6b-v3
+    environment:
+      PARAKEET_MODEL_DIR: /models/parakeet-tdt-0.6b-v3
+      PARAKEET_DEVICE: cuda
+      PARAKEET_DTYPE: float16
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - models:/models
+    networks:
+      s2s:
+        aliases:
+          - parakeet-cuda
+    restart: unless-stopped
+    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility, compute]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/health', timeout=2)",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 300s
+
+  voxtral-cuda:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.voxtral
+      args:
+        TORCH_VERSION: ${VOXTRAL_TORCH_VERSION:-2.11.0}
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu130
+    image: ${VOXTRAL_CUDA_IMAGE:-s2s-asr-voxtral:cuda}
+    container_name: s2s-voxtral-cuda
+    profiles: ["managed", "voxtral"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: asr
+      backend-id: voxtral-mini-4b-realtime
+    environment:
+      VOXTRAL_MODEL_DIR: /models/voxtral-mini-4b-realtime
+      VOXTRAL_DEVICE: cuda
+      VOXTRAL_DTYPE: bfloat16
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - models:/models
+    ports:
+      - "${VOXTRAL_PORT:-8087}:8082"
+    networks:
+      s2s:
+        aliases:
+          - voxtral-cuda
+    restart: unless-stopped
+    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility, compute]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/health', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 600s
+
   llama:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.llama
+      args:
+        LLAMA_BASE_IMAGE: ghcr.io/ggml-org/llama.cpp:server-cuda
+    image: ${LLAMA_IMAGE:-s2s-llama-granite-cuda:local}
     gpus: all
     deploy:
       resources:
@@ -44,3 +168,60 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu, utility, compute, graphics]
+
+  higgs:
+    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility, compute]
+
+  vibevoice-cuda:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.vibevoice
+      args:
+        CRISPASR_IMAGE: ghcr.io/crispstrobe/crispasr:main-cuda
+    image: ${VIBEVOICE_CUDA_IMAGE:-s2s-tts-vibevoice:cuda}
+    container_name: s2s-tts-vibevoice-cuda
+    profiles: ["managed", "vibevoice"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: tts
+      backend-id: vibevoice-realtime-0.5b
+    environment:
+      VIBEVOICE_MODEL: /models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf
+      VIBEVOICE_VOICE: /models/vibevoice/vibevoice-voice-emma.gguf
+      VIBEVOICE_VOICE_DIR: /models/vibevoice
+      VIBEVOICE_PORT: "8089"
+      VIBEVOICE_NO_WATERMARK: "1"
+    volumes:
+      - models:/models
+    ports:
+      - "${VIBEVOICE_PORT:-8089}:8089"
+    networks:
+      s2s:
+        aliases:
+          - tts-vibevoice-cuda
+    restart: unless-stopped
+    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility, compute]
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://127.0.0.1:8089/health || curl -fsS http://127.0.0.1:8089/v1/models",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 30
+      start_period: 180s

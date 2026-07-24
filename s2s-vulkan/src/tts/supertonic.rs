@@ -8,9 +8,7 @@
 
 use crate::audio::pcm::{f32_to_i16, resample_f32};
 use crate::config::Config;
-use crate::tts::supertonic_helper::{
-    load_text_to_speech, load_voice_style, Style, TextToSpeech,
-};
+use crate::tts::supertonic_helper::{load_text_to_speech, load_voice_style, Style, TextToSpeech};
 use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
@@ -36,23 +34,21 @@ impl SupertonicEngine {
         let onnx_dir = resolve_onnx_dir(cfg)?;
         let voice_path = resolve_voice_path(cfg, &onnx_dir)?;
 
-        info!(
-            "Supertonic: loading ONNX from {} (CPU), voice={}",
-            onnx_dir.display(),
-            voice_path.display()
-        );
-
         let tts = load_text_to_speech(onnx_dir.to_str().unwrap_or("."), false)
             .with_context(|| format!("load Supertonic ONNX from {}", onnx_dir.display()))?;
 
         let style = load_voice_style(&[voice_path.to_string_lossy().into_owned()], true)
             .with_context(|| format!("load voice style {}", voice_path.display()))?;
 
-        let default_lang = if cfg.language == "auto" {
-            "en".into()
-        } else {
-            cfg.language.clone()
-        };
+        // Prefer explicit --tts-language; fall back via Config resolver.
+        let default_lang = cfg.resolve_tts_language(None);
+
+        info!(
+            "Supertonic: loading ONNX from {} (CPU), voice={}, default_lang={}",
+            onnx_dir.display(),
+            voice_path.display(),
+            default_lang
+        );
 
         Ok(Self {
             inner: Arc::new(Mutex::new(tts)),
@@ -65,9 +61,15 @@ impl SupertonicEngine {
     }
 
     /// Blocking synthesis (call from `spawn_blocking`).
-    pub fn synthesize_blocking(&self, text: &str, language: Option<&str>) -> Result<(Vec<i16>, u32)> {
+    /// `language` should already be resolved by the caller when possible.
+    pub fn synthesize_blocking(
+        &self,
+        text: &str,
+        language: Option<&str>,
+    ) -> Result<(Vec<i16>, u32)> {
         let lang = language
-            .filter(|l| !l.is_empty() && *l != "auto")
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("auto"))
             .unwrap_or(self.default_lang.as_str());
 
         let mut tts = self.inner.lock();
@@ -140,7 +142,13 @@ fn resolve_voice_path(cfg: &Config, onnx_dir: &Path) -> Result<PathBuf> {
     let candidates = [
         cfg.supertonic_voice_path.clone(),
         Some(onnx_dir.join("../voice_styles").join(&file)),
-        Some(onnx_dir.parent().unwrap_or(onnx_dir).join("voice_styles").join(&file)),
+        Some(
+            onnx_dir
+                .parent()
+                .unwrap_or(onnx_dir)
+                .join("voice_styles")
+                .join(&file),
+        ),
         Some(PathBuf::from("models/supertonic/voice_styles").join(&file)),
         Some(PathBuf::from("assets/voice_styles").join(&file)),
     ];

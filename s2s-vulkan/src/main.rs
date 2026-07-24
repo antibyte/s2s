@@ -2,12 +2,16 @@
 //! with heavy inference on Vulkan-capable GGML servers.
 
 mod audio;
+mod benchmark;
 mod config;
 mod gpu;
 mod io;
+mod lab;
 mod llm;
 mod messages;
 mod pipeline;
+mod registry;
+mod runtime;
 mod stt;
 mod tts;
 mod vad;
@@ -48,7 +52,7 @@ async fn main() -> Result<()> {
 
     print_banner(&cfg, &gpu_report);
 
-    if !cfg.skip_health {
+    if !cfg.skip_health && !matches!(cfg.mode, Mode::TtsServer) {
         check_backends(&cfg).await;
     }
 
@@ -64,8 +68,9 @@ async fn main() -> Result<()> {
 
     match cfg.mode {
         Mode::Local => run_local(cfg, stop).await?,
-        Mode::Websocket => io::run_websocket_server(cfg).await?,
+        Mode::Websocket | Mode::Lab => io::run_websocket_server(cfg, gpu_report).await?,
         Mode::Realtime => io::run_realtime_server(cfg).await?,
+        Mode::TtsServer => tts::run_supertonic_server(cfg).await?,
     }
 
     Ok(())
@@ -86,9 +91,13 @@ async fn run_local(cfg: Config, stop: Arc<AtomicBool>) -> Result<()> {
     let PipelineHandles {
         audio_in_tx,
         audio_out_rx,
+        event_rx: mut _event_rx,
         should_listen: _,
+        runtime: _,
         join,
     } = spawn_pipeline(cfg.clone());
+    // Local mode: UI events unused; keep channel drained so handlers don't block.
+    tokio::spawn(async move { while _event_rx.recv().await.is_some() {} });
 
     let sample_rate = cfg.sample_rate;
     let input_device = cfg.input_device.clone();

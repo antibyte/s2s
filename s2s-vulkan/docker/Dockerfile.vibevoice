@@ -1,0 +1,31 @@
+# VibeVoice Realtime 0.5B TTS via CrispASR (GGUF, OpenAI /v1/audio/speech).
+# Weights: /models/vibevoice/ (Lab download from cstr/vibevoice-realtime-0.5b-GGUF)
+#
+# Build:
+#   docker build -f docker/Dockerfile.vibevoice -t s2s-tts-vibevoice:local .
+# CUDA image (optional):
+#   docker build -f docker/Dockerfile.vibevoice --build-arg CRISPASR_IMAGE=ghcr.io/crispstrobe/crispasr:main-cuda -t s2s-tts-vibevoice:cuda .
+
+ARG CRISPASR_IMAGE=ghcr.io/crispstrobe/crispasr:main
+FROM ${CRISPASR_IMAGE}
+
+USER root
+WORKDIR /app
+
+COPY docker/vibevoice-entrypoint.sh /app/vibevoice-entrypoint.sh
+RUN chmod +x /app/vibevoice-entrypoint.sh \
+    && (command -v crispasr >/dev/null 2>&1 \
+        || command -v crispasr-server >/dev/null 2>&1 \
+        || ls /usr/local/bin/crispasr 2>/dev/null \
+        || echo "WARN: crispasr binary not verified at build; entrypoint probes at runtime")
+
+ENV VIBEVOICE_MODEL=/models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf \
+    VIBEVOICE_VOICE=/models/vibevoice/vibevoice-voice-emma.gguf \
+    VIBEVOICE_VOICE_DIR=/models/vibevoice \
+    VIBEVOICE_HOST=0.0.0.0 \
+    VIBEVOICE_PORT=8089 \
+    VIBEVOICE_BACKEND=vibevoice-tts \
+    VIBEVOICE_NO_WATERMARK=1
+
+EXPOSE 8089
+ENTRYPOINT ["/app/vibevoice-entrypoint.sh"]

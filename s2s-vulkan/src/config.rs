@@ -9,8 +9,12 @@ pub enum Mode {
     Local,
     /// Raw 16 kHz mono i16 PCM over WebSocket.
     Websocket,
+    /// Speech Lab controller API plus raw PCM WebSocket transport.
+    Lab,
     /// OpenAI Realtime-compatible subset at /v1/realtime (audio append + audio delta).
     Realtime,
+    /// OpenAI-compatible Supertonic HTTP sidecar.
+    TtsServer,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
@@ -41,13 +45,18 @@ pub enum TtsBackend {
 /// Preferred accelerator. `auto` probes the host/container and sets `GGML_BACKEND`.
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
 pub enum GpuPreference {
-    /// Detect Vulkan → CUDA → CPU (also honors `GGML_BACKEND` / `S2S_GPU`).
+    /// Smart detect (honors `GGML_BACKEND` / `S2S_GPU`):
+    /// NVIDIA → CUDA; Intel Arc → SYCL if available else Vulkan (experimental);
+    /// AMD → Vulkan; else CPU.
     #[default]
     Auto,
     /// Force Vulkan path (`GGML_BACKEND=Vulkan0` when available).
     Vulkan,
     /// Force CUDA path (`GGML_BACKEND=CUDA0` when available).
     Cuda,
+    /// Force oneAPI SYCL path (`GGML_BACKEND=SYCL0` when available).
+    /// Requires a SYCL-built GGML binary (qwentts/llama/whisper) and oneAPI/Level Zero.
+    Sycl,
     /// Force CPU.
     Cpu,
 }
@@ -74,13 +83,16 @@ pub struct Config {
     pub vad: VadBackend,
 
     /// Speech probability / energy threshold (0..1 for energy VAD).
-    #[arg(long, default_value_t = 0.55)]
+    /// Lower = more sensitive (more false starts). Raise if short noise triggers STT.
+    #[arg(long, default_value_t = 0.62)]
     pub thresh: f32,
 
-    #[arg(long, default_value_t = 384)]
+    /// Minimum continuous speech before a turn can end (ms). Short clips → Whisper hallucinations.
+    #[arg(long, default_value_t = 900)]
     pub min_speech_ms: u64,
 
-    #[arg(long, default_value_t = 400)]
+    /// Silence hangover after speech before finalizing the segment (ms).
+    #[arg(long, default_value_t = 700)]
     pub min_silence_ms: u64,
 
     #[arg(long, default_value_t = 30)]
@@ -91,8 +103,10 @@ pub struct Config {
     #[arg(long, default_value = "http://127.0.0.1:8082", env = "S2S_WHISPER_URL")]
     pub whisper_url: String,
 
-    /// Whisper language (`auto`, `en`, `de`, …).
-    #[arg(long, default_value = "auto")]
+    /// STT language hint (`auto`, `en`, `de`, …). Also default fallback for TTS when
+    /// `--tts-language` is `auto` and the turn has no detected language.
+    /// Default `de` for the German lab (faster STT than `auto` language detect).
+    #[arg(long, default_value = "de", env = "S2S_LANGUAGE")]
     pub language: String,
 
     /// whisper-server temperature.
@@ -109,7 +123,13 @@ pub struct Config {
     #[arg(long, default_value = "local-model", env = "S2S_LLM_MODEL")]
     pub model_name: String,
 
-    #[arg(long, default_value = "You are a helpful voice assistant. Keep replies concise and conversational.")]
+    /// System prompt for the LLM. Default asks for short spoken replies in the
+    /// user's language (important: cloud models otherwise default to English).
+    #[arg(
+        long,
+        default_value = "You are a helpful voice assistant. Always reply in the same language the user speaks. If the user speaks German, reply only in German. Keep replies short and conversational (1-3 sentences).",
+        env = "S2S_SYSTEM_PROMPT"
+    )]
     pub system_prompt: String,
 
     #[arg(long, default_value_t = 30)]
@@ -125,16 +145,60 @@ pub struct Config {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub llm_stream: bool,
 
+    /// Disable chain-of-thought on Ollama/OpenAI-compatible "thinking" models
+    /// (sends `reasoning_effort=none`). Required for cloud models that return
+    /// empty `content` and only fill `reasoning` (e.g. glm-*:cloud, qwen*:cloud).
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set, env = "S2S_LLM_NO_THINK")]
+    pub llm_no_think: bool,
+
+    /// Ollama `keep_alive` for local models (seconds as number string, duration
+    /// like `5m`, or `0` / `-1` / empty). Default keeps weights warm between turns
+    /// to avoid cold-load latency. Only applied when `llm_base_url` hits :11434.
+    #[arg(long, default_value = "5m", env = "S2S_LLM_KEEP_ALIVE")]
+    pub llm_keep_alive: String,
+
     // ── TTS ──────────────────────────────────────────────────────────
     /// TTS engine: auto | supertonic | http | piper | system
     #[arg(long, value_enum, default_value_t = TtsBackend::Auto, env = "S2S_TTS")]
     pub tts: TtsBackend,
 
+    /// TTS language for engines that need it (Supertonic, many HTTP TTS APIs).
+    /// `auto` = use per-turn STT language if set, else `--language`, else `en`.
+    /// Supertonic also accepts `na` (language-agnostic). Examples: `de`, `en`, `fr`.
+    #[arg(long, default_value = "auto", env = "S2S_TTS_LANGUAGE")]
+    pub tts_language: String,
+
     /// HTTP TTS endpoint. Expected: POST JSON {text, language?} → WAV or raw PCM.
-    #[arg(long, default_value = "http://127.0.0.1:8083/v1/audio/speech", env = "S2S_TTS_URL")]
+    #[arg(
+        long,
+        default_value = "http://127.0.0.1:8083/v1/audio/speech",
+        env = "S2S_TTS_URL"
+    )]
     pub tts_url: String,
 
-    #[arg(long, default_value = "")]
+    /// OpenAI-style `model` field for HTTP TTS (e.g. `tts`, `kokoro`, qwen alias).
+    #[arg(long, default_value = "tts", env = "S2S_TTS_MODEL")]
+    pub tts_model: String,
+
+    /// Native sample rate assumed for raw PCM HTTP responses (Qwen/Kokoro = 24000).
+    /// WAV responses always use the rate embedded in the file.
+    #[arg(long, default_value_t = 24000, env = "S2S_TTS_NATIVE_SR")]
+    pub tts_native_sample_rate: u32,
+
+    /// Maximum Qwen codec frames per request (256 = about 20.5 seconds).
+    #[arg(
+        long,
+        default_value_t = 256,
+        env = "S2S_QWEN_MAX_NEW_TOKENS",
+        value_parser = clap::value_parser!(u32).range(1..=256)
+    )]
+    pub tts_http_max_new_tokens: u32,
+
+    /// Target PCM chunk duration emitted to clients while HTTP TTS is streaming.
+    #[arg(long, default_value_t = 160, env = "S2S_TTS_STREAM_CHUNK_MS")]
+    pub tts_stream_chunk_ms: u32,
+
+    #[arg(long, default_value = "", env = "S2S_TTS_API_KEY")]
     pub tts_api_key: String,
 
     /// Piper executable path (when --tts piper).
@@ -231,5 +295,53 @@ impl Config {
         }
         // Local mic mode is rarely available in containers — prefer websocket if still local
         // only when S2S_FORCE_LOCAL is unset. Leave mode alone; entrypoint sets --mode.
+    }
+
+    /// Resolve language code for TTS engines that require one (Supertonic, HTTP, …).
+    ///
+    /// Priority:
+    /// 1. `--tts-language` if not `auto` / empty
+    /// 2. per-turn STT `detected` (if provided)
+    /// 3. `--language` if not `auto`
+    /// 4. `en`
+    ///
+    /// Returns a lowercase code; use [`Self::qwen_tts_language`] when talking to
+    /// qwentts (needs full names like `german`, not ISO `de`).
+    pub fn resolve_tts_language(&self, detected: Option<&str>) -> String {
+        let explicit = self.tts_language.trim();
+        if !explicit.is_empty() && !explicit.eq_ignore_ascii_case("auto") {
+            return explicit.to_ascii_lowercase();
+        }
+        if let Some(d) = detected {
+            let d = d.trim();
+            if !d.is_empty() && !d.eq_ignore_ascii_case("auto") {
+                return d.to_ascii_lowercase();
+            }
+        }
+        let stt = self.language.trim();
+        if !stt.is_empty() && !stt.eq_ignore_ascii_case("auto") {
+            return stt.to_ascii_lowercase();
+        }
+        "en".into()
+    }
+
+    /// Map ISO / short codes to qwentts.cpp language labels stored in the GGUF
+    /// (`chinese`, `english`, `german`, …). Unknown values pass through lowercased.
+    pub fn qwen_tts_language(code: &str) -> String {
+        let c = code.trim().to_ascii_lowercase();
+        match c.as_str() {
+            "de" | "deu" | "ger" | "deutsch" => "german".into(),
+            "en" | "eng" => "english".into(),
+            "zh" | "cn" | "cmn" | "zh-cn" | "zh-tw" => "chinese".into(),
+            "fr" | "fra" | "fre" => "french".into(),
+            "es" | "spa" => "spanish".into(),
+            "it" | "ita" => "italian".into(),
+            "pt" | "por" => "portuguese".into(),
+            "ja" | "jpn" => "japanese".into(),
+            "ko" | "kor" => "korean".into(),
+            "ru" | "rus" => "russian".into(),
+            "auto" | "" => "auto".into(),
+            other => other.to_string(),
+        }
     }
 }

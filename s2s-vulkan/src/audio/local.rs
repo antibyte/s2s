@@ -98,10 +98,7 @@ pub fn run_local_io(
     let in_format = in_config.sample_format();
     let in_stream_config: StreamConfig = in_config.clone().into();
 
-    info!(
-        "Capture: {} Hz, {} ch, {:?}",
-        in_sr, in_channels, in_format
-    );
+    info!("Capture: {} Hz, {} ch, {:?}", in_sr, in_channels, in_format);
 
     // Bridge cpal callback → OS thread → tokio mpsc via blocking_send.
     let (raw_tx, raw_rx) = std::sync::mpsc::sync_channel::<Vec<f32>>(32);
@@ -136,8 +133,12 @@ pub fn run_local_io(
     });
 
     let stream_in = match in_format {
-        SampleFormat::F32 => build_input_stream_f32(&input_dev, &in_stream_config, in_channels, raw_tx)?,
-        SampleFormat::I16 => build_input_stream_i16(&input_dev, &in_stream_config, in_channels, raw_tx)?,
+        SampleFormat::F32 => {
+            build_input_stream_f32(&input_dev, &in_stream_config, in_channels, raw_tx)?
+        }
+        SampleFormat::I16 => {
+            build_input_stream_i16(&input_dev, &in_stream_config, in_channels, raw_tx)?
+        }
         other => return Err(anyhow!("unsupported input sample format: {other:?}")),
     };
     stream_in.play()?;

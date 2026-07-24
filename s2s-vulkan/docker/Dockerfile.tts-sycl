@@ -1,0 +1,92 @@
+# Qwen3-TTS (qwentts.cpp) with Intel oneAPI SYCL — for Linux hosts with Arc/iGPU.
+# Windows Docker Desktop typically cannot pass Intel GPU; use native scripts there.
+#
+# Build:
+#   docker build -f docker/Dockerfile.tts-sycl -t s2s-tts-qwen-sycl:local .
+#
+# Run (Linux + Intel GPU):
+#   docker run --rm -p 8083:8083 --device /dev/dri \
+#     -e GGML_BACKEND=SYCL0 -e ONEAPI_DEVICE_SELECTOR=level_zero:gpu \
+#     -v s2s-models:/models s2s-tts-qwen-sycl:local
+
+# syntax=docker/dockerfile:1.7
+FROM intel/oneapi:2026.1.0-devel-ubuntu24.04 AS builder
+
+ARG SYCL_DEVICE_ARCH=
+ARG QWENTTS_REV=82cd05b9f3a175612dc89fd6943e610fab096ef5
+ARG GGML_REV=c044c6f03892f9d5e98213b05f8afea1f8b0d3c9
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git cmake ninja-build build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+RUN git clone --filter=blob:none https://github.com/ServeurpersoCom/qwentts.cpp.git /src/qwentts.cpp \
+    && git -C /src/qwentts.cpp checkout --detach "${QWENTTS_REV}" \
+    && git -C /src/qwentts.cpp submodule update --init ggml \
+    && git -C /src/qwentts.cpp/ggml checkout --detach "${GGML_REV}"
+
+COPY patches/qwentts/0101-qwentts-rebased.patch /tmp/0101-qwentts-rebased.patch
+COPY patches/qwentts/0102-ggml-rebased.patch /tmp/0102-ggml-rebased.patch
+RUN git -C /src/qwentts.cpp apply --check /tmp/0101-qwentts-rebased.patch \
+    && git -C /src/qwentts.cpp apply /tmp/0101-qwentts-rebased.patch \
+    && git -C /src/qwentts.cpp/ggml apply --check /tmp/0102-ggml-rebased.patch \
+    && git -C /src/qwentts.cpp/ggml apply /tmp/0102-ggml-rebased.patch
+
+WORKDIR /src/qwentts.cpp
+RUN . /opt/intel/oneapi/setvars.sh --force && \
+    arch_arg="" && \
+    if [ -n "${SYCL_DEVICE_ARCH}" ]; then arch_arg="-DGGML_SYCL_DEVICE_ARCH=${SYCL_DEVICE_ARCH}"; fi && \
+    cmake -S . -B build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DGGML_SYCL=ON \
+      -DGGML_SYCL_F16=ON \
+      -DGGML_SYCL_DNN=ON \
+      -DGGML_SYCL_GRAPH=ON \
+      -DGGML_VULKAN=OFF \
+      -DCMAKE_C_COMPILER=icx \
+      -DCMAKE_CXX_COMPILER=icx \
+      ${arch_arg} && \
+    cmake --build build -j"$(nproc)"
+
+FROM intel/oneapi-runtime:2026.0.0-devel-ubuntu24.04 AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -m -u 10001 -s /usr/sbin/nologin s2s \
+    && mkdir -p /app /models \
+    && chown -R s2s:s2s /app /models
+
+COPY --from=builder /src/qwentts.cpp/build/tts-server /usr/local/bin/tts-server
+COPY --from=builder /src/qwentts.cpp/build/qwen-tts /usr/local/bin/qwen-tts
+# Shared libs from build tree if not static
+ENV LD_LIBRARY_PATH=/usr/local/lib:/opt/intel/oneapi/compiler/latest/lib \
+    GGML_BACKEND=SYCL0 \
+    ONEAPI_DEVICE_SELECTOR=level_zero:gpu \
+    GGML_SYCL_ENABLE_FLASH_ATTN=1 \
+    GGML_SYCL_DISABLE_GRAPH=1 \
+    GGML_SYCL_PRIORITIZE_DMMV=1 \
+    GGML_SYCL_DEV2DEV_MEMCPY=0 \
+    GGML_SYCL_DISABLE_OPT=0 \
+    GGML_SYCL_DISABLE_DNN=0 \
+    GGML_SYCL_USE_LEVEL_ZERO_API=1 \
+    QWEN_CODE_SAMPLER=host \
+    S2S_MODELS_DIR=/models
+
+WORKDIR /app
+USER s2s
+EXPOSE 8083
+HEALTHCHECK --interval=10s --timeout=3s --start-period=120s --retries=12 \
+  CMD curl -fsS http://127.0.0.1:8083/health || exit 1
+
+# Models mounted at /models/qwen/…
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["bash", "-lc", "\
+  . /opt/intel/oneapi/setvars.sh --force >/dev/null 2>&1 || true; \
+  exec tts-server \
+    --model ${QWEN_TALKER:-/models/qwen/qwen-talker-0.6b-customvoice-Q4_K_M.gguf} \
+    --codec ${QWEN_CODEC:-/models/qwen/qwen-tokenizer-12hz-Q8_0.gguf} \
+    --alias qwen3-tts-sycl \
+    --host 0.0.0.0 --port 8083 \
+    --lang german --clamp-fp16 \
+"]

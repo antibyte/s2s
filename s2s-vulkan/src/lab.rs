@@ -1,0 +1,3404 @@
+//! Backend lifecycle controller for the local Docker speech lab.
+//!
+//! Browser input can only select catalog ids. Container names, images,
+//! endpoints and environment are read from the validated embedded catalog.
+
+use crate::audio::pcm::encode_wav_f32;
+use crate::config::TtsBackend;
+use crate::registry::{
+    endpoint_for, resolve_variant, BackendCatalog, BackendDefinition, BackendStage, BackendVariant,
+    CatalogBackendStatus, HardwareProfile, StackPreset,
+};
+use crate::runtime::{self, SharedRuntime, StackStatus};
+use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::task::JoinHandle;
+use tracing::{info, warn};
+
+/// Seconds after the last WebSocket client disconnects before managed ASR/TTS/LLM
+/// containers are stopped to free VRAM/RAM. Override with `S2S_LAB_IDLE_UNLOAD_SECS`
+/// (`0` disables).
+fn idle_unload_delay() -> Duration {
+    let secs = std::env::var("S2S_LAB_IDLE_UNLOAD_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .unwrap_or(120);
+    Duration::from_secs(secs)
+}
+
+/// Multi-GB model downloads (Voxtral/Higgs/…) need no whole-body timeout and
+/// optional resume. Keep API/health timeouts on the regular `client`.
+fn build_download_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .tcp_keepalive(Duration::from_secs(30))
+        // reqwest 0.12 applies this to the full response body. Multi-GB HF
+        // artifacts (Voxtral ~8.9 GB, Higgs ~9.3 GB) need hours on slow links.
+        // Transient stalls still retry with Range resume.
+        .timeout(Duration::from_secs(24 * 60 * 60))
+        .build()
+        .context("build model download HTTP client")
+}
+
+fn stage_label(stage: BackendStage) -> &'static str {
+    match stage {
+        BackendStage::Asr => "asr",
+        BackendStage::Tts => "tts",
+        BackendStage::Llm => "llm",
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionPhase {
+    Idle,
+    Preparing,
+    Draining,
+    Stopping,
+    Starting,
+    Warming,
+    Ready,
+    Rollback,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StageTransition {
+    pub stage: BackendStage,
+    pub phase: TransitionPhase,
+    pub backend_id: String,
+    pub variant_id: String,
+    pub message: String,
+}
+
+/// Result of bring-up for one stage — commit uses the same variant/endpoint.
+#[derive(Debug, Clone)]
+struct StagePlan {
+    stage: BackendStage,
+    backend_id: String,
+    variant_id: String,
+    endpoint: String,
+    container: String,
+    started_container: Option<String>,
+    already_active: bool,
+}
+
+impl StageTransition {
+    fn idle(stage: BackendStage) -> Self {
+        Self {
+            stage,
+            phase: TransitionPhase::Idle,
+            backend_id: String::new(),
+            variant_id: String::new(),
+            message: "idle".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum LabEvent {
+    StackTransition {
+        stage: BackendStage,
+        phase: TransitionPhase,
+        backend_id: String,
+        variant_id: String,
+        message: String,
+    },
+    BackendHealth {
+        stage: BackendStage,
+        backend_id: String,
+        ok: bool,
+        message: String,
+    },
+    DownloadProgress {
+        backend_id: String,
+        artifact: String,
+        downloaded: u64,
+        total: u64,
+    },
+    /// Scheduled after the last client disconnects.
+    IdleUnloadScheduled {
+        delay_secs: u64,
+        message: String,
+    },
+    /// Managed model containers were stopped to free memory.
+    ModelsUnloaded {
+        message: String,
+    },
+    /// Containers restarted after a client reconnected.
+    ModelsReloaded {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivateStackRequest {
+    #[serde(default, alias = "asr")]
+    pub asr_id: Option<String>,
+    #[serde(default, alias = "tts")]
+    pub tts_id: Option<String>,
+    #[serde(default, alias = "llm")]
+    pub llm_id: Option<String>,
+    #[serde(default)]
+    pub voice: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveBackend {
+    pub backend_id: String,
+    pub variant_id: String,
+    pub accelerator: String,
+    pub endpoint: String,
+    pub container: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LabStackStatus {
+    pub asr: Option<ActiveBackend>,
+    pub tts: Option<ActiveBackend>,
+    pub llm: Option<ActiveBackend>,
+    pub runtime: StackStatus,
+    pub asr_transition: StageTransition,
+    pub tts_transition: StageTransition,
+    pub llm_transition: StageTransition,
+    pub ok: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LabCatalogResponse {
+    pub schema_version: u32,
+    pub hardware: HardwareProfile,
+    pub backends: Vec<CatalogBackendStatus>,
+    pub presets: Vec<StackPreset>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelActionResponse {
+    pub backend_id: String,
+    pub state: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
+struct ModelDownloadRecord {
+    state: String,
+    downloaded_bytes: u64,
+    total_bytes: u64,
+    error: String,
+    cancel: Arc<AtomicBool>,
+}
+
+#[derive(Debug, Clone)]
+struct ControllerState {
+    asr: Option<ActiveBackend>,
+    tts: Option<ActiveBackend>,
+    llm: Option<ActiveBackend>,
+    asr_transition: StageTransition,
+    tts_transition: StageTransition,
+    llm_transition: StageTransition,
+}
+
+impl Default for ControllerState {
+    fn default() -> Self {
+        Self {
+            asr: None,
+            tts: None,
+            llm: None,
+            asr_transition: StageTransition::idle(BackendStage::Asr),
+            tts_transition: StageTransition::idle(BackendStage::Tts),
+            llm_transition: StageTransition::idle(BackendStage::Llm),
+        }
+    }
+}
+
+#[async_trait]
+pub trait ContainerControl: Send + Sync {
+    async fn validate(
+        &self,
+        container: &str,
+        stage: BackendStage,
+        backend_id: &str,
+        image: &str,
+    ) -> Result<()>;
+    async fn start(&self, container: &str) -> Result<()>;
+    async fn stop(&self, container: &str, timeout: Duration) -> Result<()>;
+    async fn running(&self, container: &str) -> Result<bool>;
+}
+
+#[derive(Debug)]
+struct DisabledContainerControl;
+
+#[async_trait]
+impl ContainerControl for DisabledContainerControl {
+    async fn validate(
+        &self,
+        _container: &str,
+        _stage: BackendStage,
+        _backend_id: &str,
+        _image: &str,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn start(&self, _container: &str) -> Result<()> {
+        Ok(())
+    }
+
+    async fn stop(&self, _container: &str, _timeout: Duration) -> Result<()> {
+        Ok(())
+    }
+
+    async fn running(&self, _container: &str) -> Result<bool> {
+        Ok(false)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DockerProxyControl {
+    client: reqwest::Client,
+    base_url: String,
+}
+
+impl DockerProxyControl {
+    pub fn new(base_url: String) -> Result<Self> {
+        let base_url = base_url.trim_end_matches('/').to_string();
+        if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
+            return Err(anyhow!("S2S_DOCKER_PROXY_URL must be http(s)"));
+        }
+        Ok(Self {
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(20))
+                .build()?,
+            base_url,
+        })
+    }
+
+    async fn post_action(&self, container: &str, action: &str) -> Result<()> {
+        self.inspect_managed(container).await?;
+        let url = format!("{}/containers/{container}/{action}", self.base_url);
+        let response = self
+            .client
+            .post(&url)
+            .send()
+            .await
+            .with_context(|| format!("Docker proxy POST {url}"))?;
+        if response.status().is_success() || response.status().as_u16() == 304 {
+            return Ok(());
+        }
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if status.as_u16() == 404 {
+            return Err(anyhow!(
+                "managed container '{container}' does not exist; create the lab profiles first"
+            ));
+        }
+        Err(anyhow!("Docker proxy {action} {status}: {body}"))
+    }
+
+    async fn inspect_managed(&self, container: &str) -> Result<serde_json::Value> {
+        let url = format!("{}/containers/{container}/json", self.base_url);
+        let response = self.client.get(&url).send().await?;
+        if response.status().as_u16() == 404 {
+            return Err(anyhow!(
+                "managed container '{container}' does not exist; create the lab profiles first"
+            ));
+        }
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "Docker inspect for '{container}' failed: {}",
+                response.status()
+            ));
+        }
+        let value: serde_json::Value = response.json().await?;
+        let labels = &value["Config"]["Labels"];
+        if labels["s2s.lab.managed"].as_str() != Some("true")
+            || !matches!(labels["stage"].as_str(), Some("asr" | "tts" | "llm"))
+            || labels["backend-id"]
+                .as_str()
+                .is_none_or(|backend_id| backend_id.is_empty())
+        {
+            return Err(anyhow!(
+                "refusing lifecycle action for '{container}': required s2s.lab.managed/stage/backend-id labels are missing"
+            ));
+        }
+        Ok(value)
+    }
+}
+
+#[async_trait]
+impl ContainerControl for DockerProxyControl {
+    async fn validate(
+        &self,
+        container: &str,
+        stage: BackendStage,
+        backend_id: &str,
+        image: &str,
+    ) -> Result<()> {
+        let value = self.inspect_managed(container).await?;
+        validate_managed_target(&value, container, stage, backend_id, image)
+    }
+
+    async fn start(&self, container: &str) -> Result<()> {
+        self.post_action(container, "start").await
+    }
+
+    async fn stop(&self, container: &str, timeout: Duration) -> Result<()> {
+        let secs = timeout.as_secs().max(1);
+        self.post_action(container, &format!("stop?t={secs}")).await
+    }
+
+    async fn running(&self, container: &str) -> Result<bool> {
+        let value = match self.inspect_managed(container).await {
+            Ok(value) => value,
+            Err(error) if error.to_string().contains("does not exist") => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        Ok(value["State"]["Running"].as_bool().unwrap_or(false))
+    }
+}
+
+fn validate_managed_target(
+    value: &serde_json::Value,
+    container: &str,
+    stage: BackendStage,
+    backend_id: &str,
+    image: &str,
+) -> Result<()> {
+    let labels = &value["Config"]["Labels"];
+    let actual_image = value["Config"]["Image"].as_str().unwrap_or_default();
+    if labels["stage"].as_str() != Some(stage_label(stage))
+        || labels["backend-id"].as_str() != Some(backend_id)
+        || actual_image != image
+    {
+        return Err(anyhow!(
+            "refusing '{container}': expected stage={} backend-id={backend_id} image={image}, got stage={} backend-id={} image={actual_image}",
+            stage_label(stage),
+            labels["stage"].as_str().unwrap_or(""),
+            labels["backend-id"].as_str().unwrap_or("")
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct IdleUnloadState {
+    /// Bumped whenever a timer is cancelled or replaced.
+    generation: u64,
+    task: Option<JoinHandle<()>>,
+    /// True after containers were stopped due to idle; restart on next session.
+    models_parked: bool,
+}
+
+#[derive(Clone)]
+pub struct LabController {
+    catalog: Arc<BackendCatalog>,
+    hardware: HardwareProfile,
+    runtime: SharedRuntime,
+    control: Arc<dyn ContainerControl>,
+    docker_control_enabled: bool,
+    client: reqwest::Client,
+    download_client: reqwest::Client,
+    state: Arc<RwLock<ControllerState>>,
+    asr_lock: Arc<Mutex<()>>,
+    tts_lock: Arc<Mutex<()>>,
+    llm_lock: Arc<Mutex<()>>,
+    model_lock: Arc<Mutex<()>>,
+    downloads: Arc<RwLock<HashMap<String, ModelDownloadRecord>>>,
+    desired_llm: Arc<RwLock<String>>,
+    events: broadcast::Sender<LabEvent>,
+    /// Live PCM WebSocket sessions (voice lab clients).
+    session_count: Arc<AtomicUsize>,
+    idle_unload: Arc<Mutex<IdleUnloadState>>,
+}
+
+impl LabController {
+    pub fn new(
+        catalog: BackendCatalog,
+        hardware: HardwareProfile,
+        runtime: SharedRuntime,
+    ) -> Result<Self> {
+        let (control, docker_control_enabled): (Arc<dyn ContainerControl>, bool) =
+            if let Ok(url) = std::env::var("S2S_DOCKER_PROXY_URL") {
+                (Arc::new(DockerProxyControl::new(url)?), true)
+            } else {
+                (Arc::new(DisabledContainerControl), false)
+            };
+        Self::with_control(catalog, hardware, runtime, control, docker_control_enabled)
+    }
+
+    fn with_control(
+        catalog: BackendCatalog,
+        hardware: HardwareProfile,
+        runtime: SharedRuntime,
+        control: Arc<dyn ContainerControl>,
+        docker_control_enabled: bool,
+    ) -> Result<Self> {
+        catalog.validate()?;
+        let desired_llm = runtime
+            .try_read()
+            .map(|state| state.llm_id.clone())
+            .unwrap_or_else(|_| "local-fallback".into());
+        let (events, _) = broadcast::channel(64);
+        Ok(Self {
+            catalog: Arc::new(catalog),
+            hardware,
+            runtime,
+            control,
+            docker_control_enabled,
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(120))
+                .build()?,
+            download_client: build_download_client()?,
+            state: Arc::new(RwLock::new(ControllerState::default())),
+            asr_lock: Arc::new(Mutex::new(())),
+            tts_lock: Arc::new(Mutex::new(())),
+            llm_lock: Arc::new(Mutex::new(())),
+            model_lock: Arc::new(Mutex::new(())),
+            downloads: Arc::new(RwLock::new(HashMap::new())),
+            desired_llm: Arc::new(RwLock::new(desired_llm)),
+            events,
+            session_count: Arc::new(AtomicUsize::new(0)),
+            idle_unload: Arc::new(Mutex::new(IdleUnloadState::default())),
+        })
+    }
+
+    /// Call when a PCM WebSocket client connects. Cancels idle unload and
+    /// restarts parked model containers if needed.
+    pub async fn session_connected(&self) {
+        let count = self.session_count.fetch_add(1, Ordering::SeqCst) + 1;
+        info!(sessions = count, "lab session connected");
+        self.cancel_idle_unload().await;
+        if let Err(error) = self.ensure_models_loaded_if_parked().await {
+            warn!("failed to reload parked models after reconnect: {error:#}");
+            let _ = self.events.send(LabEvent::BackendHealth {
+                stage: BackendStage::Tts,
+                backend_id: String::new(),
+                ok: false,
+                message: format!("Modell-Reload nach Reconnect fehlgeschlagen: {error:#}"),
+            });
+        }
+    }
+
+    /// Call when a PCM WebSocket client disconnects. When no sessions remain,
+    /// schedule model unload after the idle delay (default 2 minutes).
+    pub async fn session_disconnected(&self) {
+        let prev = self.session_count.load(Ordering::SeqCst);
+        let count = if prev == 0 {
+            0
+        } else {
+            self.session_count.fetch_sub(1, Ordering::SeqCst) - 1
+        };
+        info!(sessions = count, "lab session disconnected");
+        if count == 0 {
+            self.schedule_idle_unload().await;
+        }
+    }
+
+    async fn cancel_idle_unload(&self) {
+        let mut idle = self.idle_unload.lock().await;
+        idle.generation = idle.generation.wrapping_add(1);
+        if let Some(task) = idle.task.take() {
+            task.abort();
+            info!("cancelled idle model unload timer");
+        }
+    }
+
+    async fn schedule_idle_unload(&self) {
+        let delay = idle_unload_delay();
+        if delay.is_zero() {
+            info!("idle model unload disabled (S2S_LAB_IDLE_UNLOAD_SECS=0)");
+            return;
+        }
+        if !self.docker_control_enabled {
+            return;
+        }
+
+        let mut idle = self.idle_unload.lock().await;
+        idle.generation = idle.generation.wrapping_add(1);
+        let generation = idle.generation;
+        if let Some(task) = idle.task.take() {
+            task.abort();
+        }
+
+        let controller = self.clone();
+        idle.task = Some(tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            if controller.session_count.load(Ordering::SeqCst) > 0 {
+                return;
+            }
+            {
+                let idle = controller.idle_unload.lock().await;
+                if idle.generation != generation {
+                    return;
+                }
+            }
+            if let Err(error) = controller.unload_idle_models().await {
+                warn!("idle model unload failed: {error:#}");
+            }
+        }));
+
+        let secs = delay.as_secs();
+        info!(delay_secs = secs, "scheduled idle model unload");
+        let _ = self.events.send(LabEvent::IdleUnloadScheduled {
+            delay_secs: secs,
+            message: format!(
+                "Keine Clients — Modelle werden in {secs}s entladen, um Speicher freizugeben"
+            ),
+        });
+    }
+
+    async fn unload_idle_models(&self) -> Result<()> {
+        if self.session_count.load(Ordering::SeqCst) > 0 {
+            return Ok(());
+        }
+        // Wait briefly for any in-flight turn bookkeeping (pipeline is already aborted).
+        let _ = self
+            .runtime
+            .read()
+            .await
+            .turns
+            .wait_idle(Duration::from_secs(5))
+            .await;
+
+        if self.session_count.load(Ordering::SeqCst) > 0 {
+            return Ok(());
+        }
+
+        let actives: Vec<ActiveBackend> = {
+            let state = self.state.read().await;
+            [&state.asr, &state.tts, &state.llm]
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect()
+        };
+
+        let mut stopped = Vec::new();
+        for active in &actives {
+            if active.container.is_empty() {
+                continue;
+            }
+            if !self
+                .control
+                .running(&active.container)
+                .await
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            info!(
+                container = %active.container,
+                backend_id = %active.backend_id,
+                "idle unload: stopping managed container"
+            );
+            self.control
+                .stop(&active.container, Duration::from_secs(15))
+                .await
+                .with_context(|| format!("stop {}", active.container))?;
+            stopped.push(format!("{} ({})", active.backend_id, active.container));
+        }
+
+        {
+            let mut idle = self.idle_unload.lock().await;
+            idle.models_parked = true;
+            idle.task = None;
+        }
+
+        let message = if stopped.is_empty() {
+            "Idle: keine laufenden Modell-Container zu stoppen".into()
+        } else {
+            format!("Idle: Modelle entladen — {}", stopped.join(", "))
+        };
+        info!("{message}");
+        let _ = self.events.send(LabEvent::ModelsUnloaded { message });
+        Ok(())
+    }
+
+    async fn ensure_models_loaded_if_parked(&self) -> Result<()> {
+        let parked = {
+            let idle = self.idle_unload.lock().await;
+            idle.models_parked
+        };
+        if !parked {
+            return Ok(());
+        }
+        if !self.docker_control_enabled {
+            let mut idle = self.idle_unload.lock().await;
+            idle.models_parked = false;
+            return Ok(());
+        }
+
+        let actives: Vec<ActiveBackend> = {
+            let state = self.state.read().await;
+            [&state.asr, &state.tts, &state.llm]
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect()
+        };
+
+        let mut restarted = Vec::new();
+        for active in &actives {
+            if active.container.is_empty() {
+                continue;
+            }
+            let running = self
+                .control
+                .running(&active.container)
+                .await
+                .unwrap_or(false);
+            if running {
+                continue;
+            }
+            info!(
+                container = %active.container,
+                backend_id = %active.backend_id,
+                "reloading parked model container after reconnect"
+            );
+            self.control
+                .start(&active.container)
+                .await
+                .with_context(|| format!("start {}", active.container))?;
+
+            if let Some(backend) = self.catalog.find(&active.backend_id) {
+                if let Some(variant) = backend
+                    .variants
+                    .iter()
+                    .find(|variant| variant.id == active.variant_id)
+                {
+                    // Best-effort health + warm so first utterance is not cold.
+                    if let Err(error) = self
+                        .wait_for_health(backend, variant, &active.endpoint)
+                        .await
+                    {
+                        warn!(
+                            backend_id = %active.backend_id,
+                            error = %error,
+                            "health wait after idle reload failed"
+                        );
+                    } else if let Err(error) = self.warm_backend(backend, &active.endpoint).await {
+                        warn!(
+                            backend_id = %active.backend_id,
+                            error = %error,
+                            "warmup after idle reload failed"
+                        );
+                    }
+                }
+            }
+            restarted.push(active.backend_id.clone());
+        }
+
+        {
+            let mut idle = self.idle_unload.lock().await;
+            idle.models_parked = false;
+        }
+
+        if !restarted.is_empty() {
+            let message = format!("Modelle wieder geladen: {}", restarted.join(", "));
+            info!("{message}");
+            let _ = self.events.send(LabEvent::ModelsReloaded { message });
+        } else {
+            let mut idle = self.idle_unload.lock().await;
+            idle.models_parked = false;
+        }
+        Ok(())
+    }
+
+    pub async fn catalog(&self) -> LabCatalogResponse {
+        let mut backends = self.catalog.resolved(&self.hardware);
+        let downloads = self.downloads.read().await.clone();
+        for status in &mut backends {
+            if status.backend.bundled {
+                status.installed = true;
+                status.download_state = "bundled".into();
+                status.downloaded_bytes = status.download_size_bytes;
+                status.deletable = false;
+                continue;
+            }
+            let (installed, downloaded_bytes) = model_installation_state(&status.backend)
+                .await
+                .unwrap_or((false, 0));
+            status.installed = installed;
+            status.downloaded_bytes = downloaded_bytes;
+            status.download_state = if installed {
+                "installed".into()
+            } else {
+                "missing".into()
+            };
+            if let Some(record) = downloads.get(&status.backend.id) {
+                status.download_state = record.state.clone();
+                status.downloaded_bytes = record.downloaded_bytes;
+                status.download_error = record.error.clone();
+                if record.state == "installed" {
+                    status.installed = true;
+                }
+            }
+        }
+        LabCatalogResponse {
+            schema_version: self.catalog.schema_version,
+            hardware: self.hardware.clone(),
+            backends,
+            presets: self.catalog.presets.clone(),
+        }
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<LabEvent> {
+        self.events.subscribe()
+    }
+
+    pub async fn start_model_download(&self, backend_id: &str) -> Result<ModelActionResponse> {
+        let backend = self
+            .catalog
+            .find(backend_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("unknown backend id '{backend_id}'"))?;
+        if backend.bundled {
+            return Ok(ModelActionResponse {
+                backend_id: backend.id,
+                state: "bundled".into(),
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                message: "model is bundled with its container image".into(),
+            });
+        }
+        if backend.artifacts.is_empty() {
+            return Err(anyhow!(
+                "backend '{backend_id}' has no downloadable artifacts"
+            ));
+        }
+        let total_bytes = backend.artifacts.iter().map(|artifact| artifact.size).sum();
+        let (installed, downloaded_bytes) = model_installation_state(&backend).await?;
+        if installed {
+            return Ok(ModelActionResponse {
+                backend_id: backend.id,
+                state: "installed".into(),
+                downloaded_bytes,
+                total_bytes,
+                message: "model is already installed".into(),
+            });
+        }
+        let downloaded_bytes = downloaded_bytes.saturating_add(
+            partial_download_bytes(&backend).await.unwrap_or(0),
+        );
+        {
+            let downloads = self.downloads.read().await;
+            if let Some(record) = downloads.get(backend_id) {
+                if record.state == "downloading" || record.state == "cancelling" {
+                    return Ok(ModelActionResponse {
+                        backend_id: backend_id.into(),
+                        state: record.state.clone(),
+                        downloaded_bytes: record.downloaded_bytes,
+                        total_bytes: record.total_bytes,
+                        message: "model download is already running".into(),
+                    });
+                }
+            }
+        }
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.downloads.write().await.insert(
+            backend_id.into(),
+            ModelDownloadRecord {
+                state: "downloading".into(),
+                downloaded_bytes,
+                total_bytes,
+                error: String::new(),
+                cancel: cancel.clone(),
+            },
+        );
+        let controller = self.clone();
+        tokio::spawn(async move {
+            let _download_guard = controller.model_lock.lock().await;
+            let result = controller.download_artifacts(&backend, &cancel).await;
+            let cancelled = cancel.load(Ordering::Acquire);
+            if result.is_err() && cancelled {
+                // Only wipe on explicit cancel. Transient timeouts keep `.part`
+                // files so multi-GB artifacts can resume.
+                if let Err(cleanup_error) = remove_model_artifacts(&backend).await {
+                    warn!(
+                        backend_id = %backend.id,
+                        error = %cleanup_error,
+                        "failed to clean cancelled model files"
+                    );
+                }
+            }
+            let (installed, downloaded) = model_installation_state(&backend)
+                .await
+                .unwrap_or((false, 0));
+            let partial = if installed {
+                downloaded
+            } else {
+                downloaded.saturating_add(
+                    partial_download_bytes(&backend)
+                        .await
+                        .unwrap_or(0),
+                )
+            };
+            let mut downloads = controller.downloads.write().await;
+            let record =
+                downloads
+                    .entry(backend.id.clone())
+                    .or_insert_with(|| ModelDownloadRecord {
+                        state: "missing".into(),
+                        downloaded_bytes: 0,
+                        total_bytes,
+                        error: String::new(),
+                        cancel: cancel.clone(),
+                    });
+            record.downloaded_bytes = partial.min(total_bytes);
+            match result {
+                Ok(()) if installed => {
+                    record.state = "installed".into();
+                    record.error.clear();
+                }
+                Ok(()) if cancelled => {
+                    record.state = "cancelled".into();
+                    record.error.clear();
+                }
+                Ok(()) => {
+                    record.state = "missing".into();
+                    record.error = "download ended without a complete model".into();
+                }
+                Err(_) if cancelled => {
+                    record.state = "cancelled".into();
+                    record.error.clear();
+                    info!("Model download for {} cancelled", backend.id);
+                }
+                Err(error) => {
+                    record.state = "failed".into();
+                    record.error = format!("{error:#}");
+                    warn!("Model download for {} failed: {error:#}", backend.id);
+                }
+            }
+        });
+
+        Ok(ModelActionResponse {
+            backend_id: backend_id.into(),
+            state: "downloading".into(),
+            downloaded_bytes,
+            total_bytes,
+            message: "model download started".into(),
+        })
+    }
+
+    pub async fn cancel_model_download(&self, backend_id: &str) -> Result<ModelActionResponse> {
+        let mut downloads = self.downloads.write().await;
+        let record = downloads
+            .get_mut(backend_id)
+            .ok_or_else(|| anyhow!("no model download is active for '{backend_id}'"))?;
+        if record.state != "downloading" && record.state != "cancelling" {
+            return Err(anyhow!("model download for '{backend_id}' is not running"));
+        }
+        record.cancel.store(true, Ordering::Release);
+        record.state = "cancelling".into();
+        Ok(ModelActionResponse {
+            backend_id: backend_id.into(),
+            state: record.state.clone(),
+            downloaded_bytes: record.downloaded_bytes,
+            total_bytes: record.total_bytes,
+            message: "cancellation requested".into(),
+        })
+    }
+
+    pub async fn delete_model(&self, backend_id: &str) -> Result<ModelActionResponse> {
+        let backend = self
+            .catalog
+            .find(backend_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("unknown backend id '{backend_id}'"))?;
+        if backend.bundled {
+            return Err(anyhow!(
+                "bundled model '{}' cannot be deleted separately",
+                backend.id
+            ));
+        }
+        if self.backend_is_active(&backend.id).await {
+            return Err(anyhow!(
+                "model '{}' is active; switch this stage before deleting it",
+                backend.id
+            ));
+        }
+        if let Some(record) = self.downloads.write().await.get_mut(&backend.id) {
+            record.cancel.store(true, Ordering::Release);
+            record.state = "cancelling".into();
+        }
+        let _download_guard = self.model_lock.lock().await;
+        remove_model_artifacts(&backend).await?;
+        let total_bytes = backend.artifacts.iter().map(|artifact| artifact.size).sum();
+        self.downloads.write().await.insert(
+            backend.id.clone(),
+            ModelDownloadRecord {
+                state: "missing".into(),
+                downloaded_bytes: 0,
+                total_bytes,
+                error: String::new(),
+                cancel: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        Ok(ModelActionResponse {
+            backend_id: backend.id,
+            state: "missing".into(),
+            downloaded_bytes: 0,
+            total_bytes,
+            message: "model files deleted".into(),
+        })
+    }
+
+    async fn backend_is_active(&self, backend_id: &str) -> bool {
+        let state = self.state.read().await;
+        if state
+            .asr
+            .as_ref()
+            .is_some_and(|active| active.backend_id == backend_id)
+            || state
+                .tts
+                .as_ref()
+                .is_some_and(|active| active.backend_id == backend_id)
+            || state
+                .llm
+                .as_ref()
+                .is_some_and(|active| active.backend_id == backend_id)
+        {
+            return true;
+        }
+        self.runtime.read().await.llm_id == backend_id
+    }
+
+    pub fn start_llm_monitor(&self) {
+        let controller = self.clone();
+        tokio::spawn(async move {
+            controller.monitor_external_llm().await;
+        });
+    }
+
+    pub async fn reconcile_active_stack(&self) {
+        let runtime = self.runtime.read().await.clone();
+        let asr = match self.active_from_runtime(&runtime.asr_id).await {
+            Some(active) => Some(active),
+            None => self.find_running_stage(BackendStage::Asr).await,
+        };
+        let tts = match self.active_from_runtime(&runtime.tts_id).await {
+            Some(active) => Some(active),
+            None => self.find_running_stage(BackendStage::Tts).await,
+        };
+        let llm = match self.active_from_runtime(&runtime.llm_id).await {
+            Some(active) => Some(active),
+            None => self.find_running_stage(BackendStage::Llm).await,
+        };
+        for active in [&asr, &tts, &llm].into_iter().flatten() {
+            let Some(backend) = self.catalog.find(&active.backend_id) else {
+                continue;
+            };
+            let Some(variant) = backend
+                .variants
+                .iter()
+                .find(|variant| variant.id == active.variant_id)
+            else {
+                continue;
+            };
+            if let Err(error) = self
+                .apply_runtime(backend, variant, active.endpoint.clone())
+                .await
+            {
+                warn!(
+                    "Unable to reconcile runtime for {}: {error:#}",
+                    active.backend_id
+                );
+            }
+            if let Err(error) = self
+                .stop_other_stage_containers(
+                    backend.stage,
+                    &active.container,
+                    &active.backend_id,
+                )
+                .await
+            {
+                warn!(
+                    "Unable to enforce one {:?} container at startup: {error:#}",
+                    backend.stage
+                );
+            }
+        }
+        let mut state = self.state.write().await;
+        state.asr = asr;
+        state.tts = tts;
+        state.llm = llm;
+    }
+
+    async fn find_running_stage(&self, stage: BackendStage) -> Option<ActiveBackend> {
+        if !self.docker_control_enabled {
+            return None;
+        }
+        for backend in self
+            .catalog
+            .backends
+            .iter()
+            .filter(|backend| backend.stage == stage)
+        {
+            let Some(variant) = resolve_variant(backend, &self.hardware) else {
+                continue;
+            };
+            if variant.container.is_empty()
+                || !self
+                    .control
+                    .running(&variant.container)
+                    .await
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            return Some(ActiveBackend {
+                backend_id: backend.id.clone(),
+                variant_id: variant.id.clone(),
+                accelerator: variant.accelerator.clone(),
+                endpoint: endpoint_for(variant, self.hardware.in_container),
+                container: variant.container.clone(),
+            });
+        }
+        None
+    }
+
+    async fn active_from_runtime(&self, backend_id: &str) -> Option<ActiveBackend> {
+        let backend = self.catalog.find(backend_id)?;
+        let variant = resolve_variant(backend, &self.hardware)?;
+        if self.docker_control_enabled
+            && !variant.container.is_empty()
+            && !self
+                .control
+                .running(&variant.container)
+                .await
+                .unwrap_or(false)
+        {
+            return None;
+        }
+        Some(ActiveBackend {
+            backend_id: backend.id.clone(),
+            variant_id: variant.id.clone(),
+            accelerator: variant.accelerator.clone(),
+            endpoint: endpoint_for(variant, self.hardware.in_container),
+            container: variant.container.clone(),
+        })
+    }
+
+    pub async fn status(&self) -> LabStackStatus {
+        let state = self.state.read().await.clone();
+        let rt = self.runtime.read().await;
+        LabStackStatus {
+            asr: state.asr,
+            tts: state.tts,
+            llm: state.llm,
+            runtime: runtime::status_of(&rt),
+            asr_transition: state.asr_transition,
+            tts_transition: state.tts_transition,
+            llm_transition: state.llm_transition,
+            ok: true,
+            message: "ready".into(),
+        }
+    }
+
+    pub async fn activate(&self, request: ActivateStackRequest) -> LabStackStatus {
+        let snapshot_runtime = self.runtime.read().await.clone();
+        let snapshot_state = self.state.read().await.clone();
+        let mut errors = Vec::new();
+        let mut failed_stage = None;
+        let _asr_lock = if request.asr_id.is_some() {
+            Some(self.asr_lock.lock().await)
+        } else {
+            None
+        };
+        let _tts_lock = if request.tts_id.is_some() || request.voice.is_some() {
+            Some(self.tts_lock.lock().await)
+        } else {
+            None
+        };
+        let _llm_lock = if request.llm_id.is_some() {
+            Some(self.llm_lock.lock().await)
+        } else {
+            None
+        };
+
+        let requested_voice = if let Some(voice) = request.voice.as_deref() {
+            let active_tts_id = if let Some(tts_id) = request.tts_id.as_deref() {
+                tts_id.to_string()
+            } else if let Some(active) = self.state.read().await.tts.as_ref() {
+                active.backend_id.clone()
+            } else {
+                self.runtime.read().await.tts_id.clone()
+            };
+            match resolve_requested_voice(&self.catalog, &active_tts_id, voice) {
+                Ok(voice) => Some(voice),
+                Err(error) => {
+                    let mut status = self.status().await;
+                    status.ok = false;
+                    status.message = format!("TTS voice: {error:#}");
+                    return status;
+                }
+            }
+        } else {
+            None
+        };
+
+        // Drop no-op stage switches *before* prepare so a full UI stack restore
+        // does not mark already-live stages as "preparing" forever and does not
+        // pause VAD while re-selecting the current backends.
+        let asr_id = match request.asr_id.as_deref() {
+            Some(id) if self.stage_already_active(BackendStage::Asr, id).await => None,
+            other => other.map(str::to_string),
+        };
+        let tts_id = match request.tts_id.as_deref() {
+            Some(id) if self.stage_already_active(BackendStage::Tts, id).await => None,
+            other => other.map(str::to_string),
+        };
+        let llm_id = match request.llm_id.as_deref() {
+            Some(id) if self.stage_already_active(BackendStage::Llm, id).await => None,
+            other => other.map(str::to_string),
+        };
+
+        if let Some(asr_id) = asr_id.as_deref() {
+            if let Err(error) = self.prepare_stage(BackendStage::Asr, asr_id).await {
+                self.emit_transition(
+                    BackendStage::Asr,
+                    TransitionPhase::Failed,
+                    asr_id,
+                    "",
+                    &format!("{error:#}"),
+                )
+                .await;
+                failed_stage = Some(BackendStage::Asr);
+                errors.push(format!("ASR: {error:#}"));
+            }
+        }
+        if errors.is_empty() {
+            if let Some(tts_id) = tts_id.as_deref() {
+                if let Err(error) = self.prepare_stage(BackendStage::Tts, tts_id).await {
+                    self.emit_transition(
+                        BackendStage::Tts,
+                        TransitionPhase::Failed,
+                        tts_id,
+                        "",
+                        &format!("{error:#}"),
+                    )
+                    .await;
+                    failed_stage = Some(BackendStage::Tts);
+                    errors.push(format!("TTS: {error:#}"));
+                }
+            }
+        }
+        if errors.is_empty() {
+            if let Some(llm_id) = llm_id.as_deref() {
+                if let Err(error) = self.prepare_stage(BackendStage::Llm, llm_id).await {
+                    self.emit_transition(
+                        BackendStage::Llm,
+                        TransitionPhase::Failed,
+                        llm_id,
+                        "",
+                        &format!("{error:#}"),
+                    )
+                    .await;
+                    failed_stage = Some(BackendStage::Llm);
+                    errors.push(format!("LLM: {error:#}"));
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            let mut status = self.status().await;
+            status.ok = false;
+            status.message = errors.join("; ");
+            return status;
+        }
+
+        // Start + health + warm the replacements *before* pausing turns so a
+        // slow model boot (or hung Docker stop) cannot freeze ASR for minutes.
+        let mut plans: Vec<StagePlan> = Vec::new();
+        let mut brought_up: Vec<(BackendStage, String)> = Vec::new();
+        if let Some(id) = asr_id.as_deref() {
+            match self.bring_up_stage(BackendStage::Asr, id).await {
+                Ok(plan) => {
+                    if let Some(container) = plan.started_container.clone() {
+                        brought_up.push((BackendStage::Asr, container));
+                    }
+                    if !plan.already_active {
+                        plans.push(plan);
+                    }
+                }
+                Err(error) => {
+                    self.emit_transition(
+                        BackendStage::Asr,
+                        TransitionPhase::Failed,
+                        id,
+                        "",
+                        &format!("{error:#}"),
+                    )
+                    .await;
+                    failed_stage = Some(BackendStage::Asr);
+                    errors.push(format!("ASR: {error:#}"));
+                }
+            }
+        }
+        if errors.is_empty() {
+            if let Some(id) = tts_id.as_deref() {
+                match self.bring_up_stage(BackendStage::Tts, id).await {
+                    Ok(plan) => {
+                        if let Some(container) = plan.started_container.clone() {
+                            brought_up.push((BackendStage::Tts, container));
+                        }
+                        if !plan.already_active {
+                            plans.push(plan);
+                        }
+                    }
+                    Err(error) => {
+                        self.emit_transition(
+                            BackendStage::Tts,
+                            TransitionPhase::Failed,
+                            id,
+                            "",
+                            &format!("{error:#}"),
+                        )
+                        .await;
+                        failed_stage = Some(BackendStage::Tts);
+                        errors.push(format!("TTS: {error:#}"));
+                    }
+                }
+            }
+        }
+        if errors.is_empty() {
+            if let Some(id) = llm_id.as_deref() {
+                match self.bring_up_stage(BackendStage::Llm, id).await {
+                    Ok(plan) => {
+                        if let Some(container) = plan.started_container.clone() {
+                            brought_up.push((BackendStage::Llm, container));
+                        }
+                        if !plan.already_active {
+                            plans.push(plan);
+                        }
+                    }
+                    Err(error) => {
+                        self.emit_transition(
+                            BackendStage::Llm,
+                            TransitionPhase::Failed,
+                            id,
+                            "",
+                            &format!("{error:#}"),
+                        )
+                        .await;
+                        failed_stage = Some(BackendStage::Llm);
+                        errors.push(format!("LLM: {error:#}"));
+                    }
+                }
+            }
+        }
+        if !errors.is_empty() {
+            // Runtime was not cut over — stop any pre-started replacements so
+            // we do not leave orphan stage containers running.
+            self.abort_brought_up(&brought_up).await;
+            let mut status = self.status().await;
+            status.ok = false;
+            status.message = errors.join("; ");
+            return status;
+        }
+
+        let has_switch = !plans.is_empty();
+        // Voice-only changes only need a brief pause when a real cutover runs.
+        // Never emit "draining" for no-op stack restores — that left the UI
+        // stuck with swapBusy and a permanently disabled voice picker.
+        let needs_turn_pause = has_switch
+            || (requested_voice.is_some() && !has_switch);
+        let turn_coordinator = self.runtime.read().await.turns.clone();
+        // Guard must drop on every path (including early returns) so a stuck
+        // Docker stop can never leave VAD permanently paused.
+        let _turn_pause = needs_turn_pause.then(|| turn_coordinator.pause());
+        if has_switch {
+            for plan in &plans {
+                self.emit_draining(plan.stage, &plan.backend_id).await;
+            }
+            let drained = turn_coordinator.wait_idle(Duration::from_secs(10)).await;
+            let message = if drained {
+                "active speech turn drained"
+            } else {
+                "drain timeout reached after 10 seconds"
+            };
+            for plan in &plans {
+                self.emit_draining_message(plan.stage, &plan.backend_id, message)
+                    .await;
+            }
+        } else if requested_voice.is_some() {
+            // Voice cutover: wait briefly for idle without sticky "draining" phase.
+            let _ = turn_coordinator.wait_idle(Duration::from_secs(3)).await;
+        }
+
+        for plan in &plans {
+            if let Err(error) = self.commit_stage(plan).await {
+                self.emit_transition(
+                    plan.stage,
+                    TransitionPhase::Failed,
+                    &plan.backend_id,
+                    &plan.variant_id,
+                    &format!("{error:#}"),
+                )
+                .await;
+                failed_stage = Some(plan.stage);
+                errors.push(format!("{:?}: {error:#}", plan.stage));
+                break;
+            }
+        }
+
+        if !errors.is_empty() {
+            self.emit_transition(
+                failed_stage.unwrap_or(BackendStage::Asr),
+                TransitionPhase::Rollback,
+                "",
+                "",
+                "restoring previous stack",
+            )
+            .await;
+            *self.runtime.write().await = snapshot_runtime;
+            if let Err(error) = self.restore_containers(&snapshot_state).await {
+                errors.push(format!("rollback: {error:#}"));
+            }
+            *self.state.write().await = snapshot_state;
+            let mut status = self.status().await;
+            status.ok = false;
+            status.message = errors.join("; ");
+            return status;
+        }
+
+        if let Some(voice) = requested_voice.as_ref() {
+            self.runtime.write().await.cfg.supertonic_voice = voice.clone();
+        }
+
+        // Always publish a terminal "ready" for stages that are live so the UI
+        // never stays on preparing/draining after a no-op or voice-only call.
+        self.emit_active_stages_ready().await;
+
+        let mut status = self.status().await;
+        status.message = if has_switch {
+            "stack activated".into()
+        } else if requested_voice.is_some() {
+            "voice activated".into()
+        } else {
+            "no changes".into()
+        };
+        status
+    }
+
+    async fn emit_active_stages_ready(&self) {
+        let state = self.state.read().await.clone();
+        for (stage, active) in [
+            (BackendStage::Asr, state.asr.as_ref()),
+            (BackendStage::Tts, state.tts.as_ref()),
+            (BackendStage::Llm, state.llm.as_ref()),
+        ] {
+            let Some(active) = active else { continue };
+            let phase = match stage {
+                BackendStage::Asr => state.asr_transition.phase,
+                BackendStage::Tts => state.tts_transition.phase,
+                BackendStage::Llm => state.llm_transition.phase,
+            };
+            if matches!(phase, TransitionPhase::Ready | TransitionPhase::Idle) {
+                continue;
+            }
+            self.emit_transition(
+                stage,
+                TransitionPhase::Ready,
+                &active.backend_id,
+                &active.variant_id,
+                "backend ready",
+            )
+            .await;
+        }
+    }
+
+    async fn prepare_stage(&self, stage: BackendStage, backend_id: &str) -> Result<()> {
+        let backend = self
+            .catalog
+            .find(backend_id)
+            .ok_or_else(|| anyhow!("unknown backend id '{backend_id}'"))?;
+        if backend.stage != stage {
+            return Err(anyhow!(
+                "backend '{backend_id}' belongs to {:?}, not {:?}",
+                backend.stage,
+                stage
+            ));
+        }
+        let variant = resolve_variant(backend, &self.hardware).ok_or_else(|| {
+            anyhow!("backend '{backend_id}' has no compatible certified variant for this host")
+        })?;
+        if self.docker_control_enabled && !variant.container.is_empty() {
+            self.control
+                .validate(&variant.container, stage, &backend.id, &variant.image)
+                .await?;
+        }
+        self.emit_transition(
+            stage,
+            TransitionPhase::Preparing,
+            backend_id,
+            &variant.id,
+            "validating catalog and model artifacts",
+        )
+        .await;
+        if !backend.bundled {
+            let (installed, downloaded_bytes) = model_installation_state(backend).await?;
+            if !installed {
+                let total_bytes: u64 = backend.artifacts.iter().map(|artifact| artifact.size).sum();
+                return Err(anyhow!(
+                    "model '{backend_id}' is not installed ({downloaded_bytes}/{total_bytes} bytes); confirm the model download first"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    async fn emit_draining(&self, stage: BackendStage, backend_id: &str) {
+        self.emit_draining_message(stage, backend_id, "draining active speech turn")
+            .await;
+    }
+
+    async fn emit_draining_message(&self, stage: BackendStage, backend_id: &str, message: &str) {
+        let variant_id = self
+            .catalog
+            .find(backend_id)
+            .and_then(|backend| resolve_variant(backend, &self.hardware))
+            .map(|variant| variant.id.as_str())
+            .unwrap_or_default();
+        self.emit_transition(
+            stage,
+            TransitionPhase::Draining,
+            backend_id,
+            variant_id,
+            message,
+        )
+        .await;
+    }
+
+    async fn stage_already_active(&self, stage: BackendStage, backend_id: &str) -> bool {
+        let state = self.state.read().await;
+        let active = match stage {
+            BackendStage::Asr => state.asr.as_ref(),
+            BackendStage::Tts => state.tts.as_ref(),
+            BackendStage::Llm => state.llm.as_ref(),
+        };
+        active.is_some_and(|active| active.backend_id == backend_id)
+    }
+
+    fn stage_endpoint(&self, backend: &BackendDefinition, variant: &BackendVariant) -> String {
+        if backend.id == "external-openai" {
+            return std::env::var("S2S_LLM_EXTERNAL_URL").unwrap_or_else(|_| {
+                self.runtime
+                    .try_read()
+                    .map(|rt| rt.cfg.llm_base_url.clone())
+                    .unwrap_or_default()
+            });
+        }
+        endpoint_for(variant, self.hardware.in_container)
+    }
+
+    fn current_stage_endpoint(&self, stage: BackendStage, rt: &crate::runtime::RuntimeState) -> String {
+        match stage {
+            BackendStage::Asr => rt.cfg.whisper_url.clone(),
+            BackendStage::Tts => rt.cfg.tts_url.clone(),
+            BackendStage::Llm => rt.cfg.llm_base_url.clone(),
+        }
+    }
+
+    /// Candidate variants for a stage, preferred first (same ranking as catalog resolve).
+    fn stage_candidates<'a>(
+        &'a self,
+        stage: BackendStage,
+        backend_id: &str,
+    ) -> Result<(&'a BackendDefinition, Vec<&'a BackendVariant>)> {
+        let backend = self
+            .catalog
+            .find(backend_id)
+            .ok_or_else(|| anyhow!("unknown backend id '{backend_id}'"))?;
+        if backend.stage != stage {
+            return Err(anyhow!(
+                "backend '{backend_id}' belongs to {:?}, not {:?}",
+                backend.stage,
+                stage
+            ));
+        }
+        let mut candidates: Vec<&BackendVariant> = backend
+            .variants
+            .iter()
+            .filter(|variant| crate::registry::variant_is_compatible(variant, &self.hardware))
+            .collect();
+        if candidates.is_empty() {
+            return Err(anyhow!(
+                "backend '{backend_id}' has no compatible certified variant for this host"
+            ));
+        }
+        candidates.sort_by_key(|variant| crate::registry::variant_rank(variant, &self.hardware));
+        Ok((backend, candidates))
+    }
+
+    /// Start + health + warm without cutting over runtime.
+    /// Host/remote variants fail fast; if unreachable, fall back to a managed
+    /// container variant when Docker control is enabled.
+    async fn bring_up_stage(&self, stage: BackendStage, backend_id: &str) -> Result<StagePlan> {
+        let (backend, candidates) = self.stage_candidates(stage, backend_id)?;
+
+        if self.stage_already_active(stage, backend_id).await {
+            let rt = self.runtime.read().await;
+            let active_ep = self.current_stage_endpoint(stage, &rt);
+            if let Some(active_variant) = candidates
+                .iter()
+                .find(|variant| self.stage_endpoint(backend, variant) == active_ep)
+                .copied()
+            {
+                return Ok(StagePlan {
+                    stage,
+                    backend_id: backend_id.into(),
+                    variant_id: active_variant.id.clone(),
+                    endpoint: active_ep,
+                    container: active_variant.container.clone(),
+                    started_container: None,
+                    already_active: true,
+                });
+            }
+        }
+
+        let mut last_error = None;
+        for variant in &candidates {
+            let endpoint = self.stage_endpoint(backend, variant);
+            let host_only = variant.container.is_empty();
+
+            // Host/remote backends must already be up — do not block for 5 min.
+            if host_only {
+                self.emit_transition(
+                    stage,
+                    TransitionPhase::Starting,
+                    backend_id,
+                    &variant.id,
+                    &format!("probing host endpoint {endpoint}"),
+                )
+                .await;
+                match self
+                    .wait_for_health_with_timeout(
+                        backend,
+                        variant,
+                        &endpoint,
+                        Duration::from_secs(12),
+                    )
+                    .await
+                {
+                    Ok(()) => {
+                        self.emit_transition(
+                            stage,
+                            TransitionPhase::Warming,
+                            backend_id,
+                            &variant.id,
+                            "warming inference path",
+                        )
+                        .await;
+                        match self.warm_backend(backend, &endpoint).await {
+                            Ok(()) => {
+                                return Ok(StagePlan {
+                                    stage,
+                                    backend_id: backend_id.into(),
+                                    variant_id: variant.id.clone(),
+                                    endpoint,
+                                    container: String::new(),
+                                    started_container: None,
+                                    already_active: false,
+                                });
+                            }
+                            Err(error) => {
+                                last_error = Some(error);
+                                continue;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        warn!(
+                            backend_id,
+                            variant = %variant.id,
+                            error = %error,
+                            "host/remote variant unreachable — trying next candidate"
+                        );
+                        last_error = Some(error);
+                        continue;
+                    }
+                }
+            }
+
+            if !self.docker_control_enabled {
+                last_error = Some(anyhow!(
+                    "managed container '{}' requires Docker lab control",
+                    variant.container
+                ));
+                continue;
+            }
+
+            self.emit_transition(
+                stage,
+                TransitionPhase::Starting,
+                backend_id,
+                &variant.id,
+                "starting selected backend",
+            )
+            .await;
+            match self.control.start(&variant.container).await {
+                Ok(()) => {}
+                Err(error) => {
+                    warn!(
+                        container = %variant.container,
+                        error = %error,
+                        "failed to start managed container — trying next candidate"
+                    );
+                    last_error = Some(error);
+                    continue;
+                }
+            }
+
+            if let Err(error) = self.wait_for_health(backend, variant, &endpoint).await {
+                warn!(
+                    container = %variant.container,
+                    error = %error,
+                    "managed backend health failed — trying next candidate"
+                );
+                last_error = Some(error);
+                let _ = self
+                    .control
+                    .stop(&variant.container, Duration::from_secs(5))
+                    .await;
+                continue;
+            }
+
+            self.emit_transition(
+                stage,
+                TransitionPhase::Warming,
+                backend_id,
+                &variant.id,
+                "warming inference path",
+            )
+            .await;
+            if let Err(error) = self.warm_backend(backend, &endpoint).await {
+                last_error = Some(error);
+                let _ = self
+                    .control
+                    .stop(&variant.container, Duration::from_secs(5))
+                    .await;
+                continue;
+            }
+
+            return Ok(StagePlan {
+                stage,
+                backend_id: backend_id.into(),
+                variant_id: variant.id.clone(),
+                endpoint,
+                container: variant.container.clone(),
+                started_container: Some(variant.container.clone()),
+                already_active: false,
+            });
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            anyhow!(
+                "no reachable variant for '{backend_id}'. For host TTS start the server first \
+                 (e.g. scripts/start_vibevoice.ps1 on :8089) or build the managed container image."
+            )
+        }))
+    }
+
+    async fn abort_brought_up(&self, brought_up: &[(BackendStage, String)]) {
+        if !self.docker_control_enabled {
+            return;
+        }
+        let keep: HashSet<String> = {
+            let state = self.state.read().await;
+            [&state.asr, &state.tts, &state.llm]
+                .into_iter()
+                .flatten()
+                .map(|active| active.container.clone())
+                .filter(|container| !container.is_empty())
+                .collect()
+        };
+        for (_stage, container) in brought_up {
+            if container.is_empty() || keep.contains(container) {
+                continue;
+            }
+            warn!(
+                container = %container,
+                "aborting pre-started stage container after failed multi-stage activate"
+            );
+            let stop = self.control.stop(container, Duration::from_secs(5));
+            if let Err(error) = tokio::time::timeout(Duration::from_secs(10), stop).await {
+                warn!(container = %container, "abort stop timed out: {error:?}");
+            } else {
+                // ignore stop Result — best effort
+            }
+        }
+    }
+
+    /// Stop siblings and cut runtime over using the plan from bring_up.
+    async fn commit_stage(&self, plan: &StagePlan) -> Result<()> {
+        let backend = self
+            .catalog
+            .find(&plan.backend_id)
+            .ok_or_else(|| anyhow!("unknown backend id '{}'", plan.backend_id))?;
+        let variant = backend
+            .variants
+            .iter()
+            .find(|variant| variant.id == plan.variant_id)
+            .ok_or_else(|| anyhow!("variant '{}' missing after bring-up", plan.variant_id))?;
+
+        if plan.already_active {
+            self.emit_transition(
+                plan.stage,
+                TransitionPhase::Ready,
+                &plan.backend_id,
+                &plan.variant_id,
+                "backend already active",
+            )
+            .await;
+            return Ok(());
+        }
+
+        if self.docker_control_enabled {
+            self.emit_transition(
+                plan.stage,
+                TransitionPhase::Stopping,
+                &plan.backend_id,
+                &plan.variant_id,
+                "stopping previous stage container",
+            )
+            .await;
+            self.stop_other_stage_containers(plan.stage, &plan.container, &plan.backend_id)
+                .await?;
+        }
+
+        self.apply_runtime(backend, variant, plan.endpoint.clone())
+            .await?;
+        let active = ActiveBackend {
+            backend_id: backend.id.clone(),
+            variant_id: variant.id.clone(),
+            accelerator: variant.accelerator.clone(),
+            endpoint: plan.endpoint.clone(),
+            container: plan.container.clone(),
+        };
+        {
+            let mut state = self.state.write().await;
+            match plan.stage {
+                BackendStage::Asr => state.asr = Some(active),
+                BackendStage::Tts => state.tts = Some(active),
+                BackendStage::Llm => state.llm = Some(active),
+            }
+        }
+        if plan.stage == BackendStage::Llm {
+            *self.desired_llm.write().await = backend.id.clone();
+        }
+        self.emit_transition(
+            plan.stage,
+            TransitionPhase::Ready,
+            &plan.backend_id,
+            &plan.variant_id,
+            "backend ready",
+        )
+        .await;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    async fn switch_stage(&self, stage: BackendStage, backend_id: &str) -> Result<()> {
+        let plan = self.bring_up_stage(stage, backend_id).await?;
+        self.commit_stage(&plan).await
+    }
+
+    async fn download_artifacts(
+        &self,
+        backend: &BackendDefinition,
+        cancel: &AtomicBool,
+    ) -> Result<()> {
+        let root = std::env::var("S2S_MODELS_DIR").unwrap_or_else(|_| "/models".into());
+        let backend_total: u64 = backend.artifacts.iter().map(|artifact| artifact.size).sum();
+        let mut completed = 0u64;
+        for artifact in &backend.artifacts {
+            if cancel.load(Ordering::Acquire) {
+                return Err(anyhow!("model download cancelled"));
+            }
+            let path = Path::new(&root).join(&artifact.path);
+            if artifact_matches(&path, artifact.size, &artifact.sha256).await? {
+                let add = if artifact.size > 0 {
+                    artifact.size
+                } else {
+                    tokio::fs::metadata(&path)
+                        .await
+                        .map(|meta| meta.len())
+                        .unwrap_or(0)
+                };
+                completed = completed.saturating_add(add);
+                self.update_download_progress(&backend.id, completed).await;
+                continue;
+            }
+
+            let downloaded = self
+                .download_one_artifact(backend, artifact, &path, completed, backend_total, cancel)
+                .await?;
+            completed = completed.saturating_add(downloaded);
+            self.update_download_progress(&backend.id, completed).await;
+            info!(
+                "Prepared model artifact {} for {} ({} bytes)",
+                path.display(),
+                backend.id,
+                downloaded
+            );
+        }
+        Ok(())
+    }
+
+    async fn download_one_artifact(
+        &self,
+        backend: &BackendDefinition,
+        artifact: &crate::registry::ModelArtifact,
+        path: &Path,
+        completed_before: u64,
+        backend_total: u64,
+        cancel: &AtomicBool,
+    ) -> Result<u64> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow!("artifact '{}' has no parent", path.display()))?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("create model directory {}", parent.display()))?;
+
+        let part = part_path(path)?;
+        const MAX_ATTEMPTS: u32 = 12;
+        let mut attempt = 0u32;
+        loop {
+            attempt += 1;
+            if cancel.load(Ordering::Acquire) {
+                return Err(anyhow!("model download cancelled"));
+            }
+            match self
+                .download_one_artifact_attempt(
+                    backend,
+                    artifact,
+                    path,
+                    &part,
+                    completed_before,
+                    backend_total,
+                    cancel,
+                )
+                .await
+            {
+                Ok(bytes) => return Ok(bytes),
+                Err(error) if cancel.load(Ordering::Acquire) => return Err(error),
+                Err(error) if attempt < MAX_ATTEMPTS && is_transient_download_error(&error) => {
+                    let backoff = Duration::from_secs(2u64.saturating_pow(attempt.min(6)));
+                    warn!(
+                        backend_id = %backend.id,
+                        artifact = %artifact.path,
+                        attempt,
+                        backoff_secs = backoff.as_secs(),
+                        error = %error,
+                        "transient model download error — retrying (partial kept for resume)"
+                    );
+                    tokio::time::sleep(backoff).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    async fn download_one_artifact_attempt(
+        &self,
+        backend: &BackendDefinition,
+        artifact: &crate::registry::ModelArtifact,
+        path: &Path,
+        part: &Path,
+        completed_before: u64,
+        backend_total: u64,
+        cancel: &AtomicBool,
+    ) -> Result<u64> {
+        let mut existing = match tokio::fs::metadata(part).await {
+            Ok(meta) if meta.is_file() => meta.len(),
+            Ok(_) => 0,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(error.into()),
+        };
+        if artifact.size > 0 && existing > artifact.size {
+            warn!(
+                artifact = %artifact.path,
+                existing,
+                expected = artifact.size,
+                "partial download larger than expected — restarting artifact"
+            );
+            let _ = tokio::fs::remove_file(part).await;
+            existing = 0;
+        }
+
+        // Already fully downloaded into .part — promote after integrity check.
+        if artifact.size > 0 && existing == artifact.size {
+            let digest = hash_file_hex(part).await?;
+            if !artifact.sha256.is_empty() && !digest.eq_ignore_ascii_case(&artifact.sha256) {
+                let _ = tokio::fs::remove_file(part).await;
+                return Err(anyhow!(
+                    "artifact '{}' SHA-256 mismatch on partial: got {digest}, expected {}",
+                    artifact.path,
+                    artifact.sha256
+                ));
+            }
+            replace_artifact(part, path).await?;
+            return Ok(artifact.size);
+        }
+
+        let mut hasher = Sha256::new();
+        if existing > 0 {
+            hash_file_into(part, &mut hasher).await?;
+        }
+
+        let mut request = self.download_client.get(&artifact.source);
+        if let Ok(token) = std::env::var("S2S_HF_TOKEN").or_else(|_| std::env::var("HF_TOKEN")) {
+            let token = token.trim();
+            if !token.is_empty() && artifact.source.contains("huggingface.co") {
+                request = request.bearer_auth(token);
+            }
+        }
+        if existing > 0 {
+            request = request.header(
+                reqwest::header::RANGE,
+                format!("bytes={existing}-"),
+            );
+        }
+
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("download {}", artifact.source))?
+            .error_for_status()
+            .with_context(|| format!("download {}", artifact.source))?;
+
+        let status = response.status();
+        let resume = existing > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT;
+        if existing > 0 && !resume {
+            // Server ignored Range (HTTP 200) — restart from scratch.
+            warn!(
+                artifact = %artifact.path,
+                status = %status,
+                "server did not honor Range resume — restarting artifact"
+            );
+            drop(hasher);
+            let _ = tokio::fs::remove_file(part).await;
+            existing = 0;
+            hasher = Sha256::new();
+        }
+
+        let mut output = if existing > 0 {
+            tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(part)
+                .await
+                .with_context(|| format!("append partial artifact {}", part.display()))?
+        } else {
+            tokio::fs::File::create(part)
+                .await
+                .with_context(|| format!("create partial artifact {}", part.display()))?
+        };
+
+        let mut stream = response.bytes_stream();
+        let mut downloaded = existing;
+        while let Some(chunk) = stream.next().await {
+            if cancel.load(Ordering::Acquire) {
+                drop(output);
+                return Err(anyhow!("model download cancelled"));
+            }
+            let chunk = chunk.context("read artifact download")?;
+            downloaded = downloaded
+                .checked_add(chunk.len() as u64)
+                .ok_or_else(|| anyhow!("artifact byte count overflow"))?;
+            if artifact.size > 0 && downloaded > artifact.size {
+                return Err(anyhow!(
+                    "artifact '{}' exceeded expected size {}",
+                    artifact.path,
+                    artifact.size
+                ));
+            }
+            output.write_all(&chunk).await?;
+            hasher.update(&chunk);
+            let _ = self.events.send(LabEvent::DownloadProgress {
+                backend_id: backend.id.clone(),
+                artifact: artifact.path.clone(),
+                downloaded: completed_before.saturating_add(downloaded),
+                total: backend_total,
+            });
+            self.update_download_progress(
+                &backend.id,
+                completed_before.saturating_add(downloaded),
+            )
+            .await;
+        }
+        output.flush().await?;
+        output.sync_all().await?;
+        drop(output);
+
+        if artifact.size > 0 && downloaded != artifact.size {
+            return Err(anyhow!(
+                "artifact '{}' has size {downloaded}, expected {} (incomplete — will resume)",
+                artifact.path,
+                artifact.size
+            ));
+        }
+        let digest = hex::encode(hasher.finalize());
+        if !artifact.sha256.is_empty() && !digest.eq_ignore_ascii_case(&artifact.sha256) {
+            let _ = tokio::fs::remove_file(part).await;
+            return Err(anyhow!(
+                "artifact '{}' SHA-256 mismatch: got {digest}, expected {}",
+                artifact.path,
+                artifact.sha256
+            ));
+        }
+        replace_artifact(part, path).await?;
+        Ok(downloaded)
+    }
+
+    async fn update_download_progress(&self, backend_id: &str, downloaded_bytes: u64) {
+        if let Some(record) = self.downloads.write().await.get_mut(backend_id) {
+            record.downloaded_bytes = downloaded_bytes.min(record.total_bytes);
+        }
+    }
+
+    async fn stop_other_stage_containers(
+        &self,
+        stage: BackendStage,
+        selected: &str,
+        keep_backend_id: &str,
+    ) -> Result<()> {
+        // Containers belonging to the backend we are activating (used when the
+        // selected variant is host/remote with empty container name — e.g.
+        // VibeVoice on :8089 is still the managed s2s-tts-vibevoice process).
+        let keep_containers: HashSet<&str> = self
+            .catalog
+            .backends
+            .iter()
+            .filter(|b| b.id == keep_backend_id)
+            .flat_map(|b| b.variants.iter().map(|v| v.container.as_str()))
+            .filter(|c| !c.is_empty())
+            .collect();
+
+        let mut seen = HashSet::new();
+        for backend in self.catalog.backends.iter().filter(|b| b.stage == stage) {
+            for variant in &backend.variants {
+                let container = variant.container.as_str();
+                if container.is_empty()
+                    || container == selected
+                    || keep_containers.contains(container)
+                    || !seen.insert(container)
+                {
+                    continue;
+                }
+                if self.control.running(container).await.unwrap_or(false) {
+                    info!("Stopping managed {:?} container {container}", stage);
+                    // Best-effort: a hung Docker stop must not block stack
+                    // activate forever (that freezes VAD via turn pause).
+                    let stop = self.control.stop(container, Duration::from_secs(8));
+                    match tokio::time::timeout(Duration::from_secs(20), stop).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => {
+                            warn!(
+                                container,
+                                error = %error,
+                                "failed to stop managed container — continuing stack switch"
+                            );
+                        }
+                        Err(_) => {
+                            warn!(
+                                container,
+                                "timed out stopping managed container after 20s — continuing stack switch"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn wait_for_health(
+        &self,
+        backend: &BackendDefinition,
+        variant: &BackendVariant,
+        endpoint: &str,
+    ) -> Result<()> {
+        let health_timeout = std::env::var("S2S_LAB_HEALTH_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(300)
+            .clamp(10, 900);
+        // Host/remote (no managed container) must already be running — fail fast
+        // so stack switches never freeze the UI for minutes on a dead port.
+        let timeout = if variant.container.is_empty() {
+            Duration::from_secs(12)
+        } else if self.docker_control_enabled {
+            Duration::from_secs(health_timeout)
+        } else {
+            Duration::from_secs(1)
+        };
+        self.wait_for_health_with_timeout(backend, variant, endpoint, timeout)
+            .await
+    }
+
+    async fn wait_for_health_with_timeout(
+        &self,
+        backend: &BackendDefinition,
+        variant: &BackendVariant,
+        endpoint: &str,
+        timeout: Duration,
+    ) -> Result<()> {
+        if endpoint.is_empty() {
+            return Ok(());
+        }
+        let base = endpoint
+            .split("/v1/")
+            .next()
+            .unwrap_or(endpoint)
+            .trim_end_matches('/');
+        let health_path = if variant.health_path.is_empty() {
+            "/"
+        } else {
+            variant.health_path.as_str()
+        };
+        let url = if health_path.starts_with("/v1/") && endpoint.contains("/v1") {
+            format!(
+                "{}{}",
+                endpoint.trim_end_matches('/'),
+                health_path.trim_start_matches("/v1")
+            )
+        } else {
+            format!("{base}{health_path}")
+        };
+        let deadline = tokio::time::Instant::now() + timeout;
+        let last_error = loop {
+            let failure = match self
+                .client
+                .get(&url)
+                .timeout(Duration::from_secs(2))
+                .send()
+                .await
+            {
+                Ok(response)
+                    if response.status().is_success() || response.status().as_u16() == 404 =>
+                {
+                    // Reject HTML (e.g. web UI occupying the same host port).
+                    let ctype = response
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    if ctype.contains("text/html") {
+                        format!("HTML response at {url} (wrong service / port conflict)")
+                    } else {
+                        let _ = self.events.send(LabEvent::BackendHealth {
+                            stage: backend.stage,
+                            backend_id: backend.id.clone(),
+                            ok: true,
+                            message: format!("reachable at {url}"),
+                        });
+                        return Ok(());
+                    }
+                }
+                Ok(response) => format!("HTTP {}", response.status()),
+                Err(error) => error.to_string(),
+            };
+            if tokio::time::Instant::now() >= deadline {
+                break failure;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        };
+        let _ = self.events.send(LabEvent::BackendHealth {
+            stage: backend.stage,
+            backend_id: backend.id.clone(),
+            ok: false,
+            message: last_error.clone(),
+        });
+        Err(anyhow!(
+            "backend '{}' health check failed at {url}: {last_error}",
+            backend.id
+        ))
+    }
+
+    async fn warm_backend(&self, backend: &BackendDefinition, endpoint: &str) -> Result<()> {
+        if endpoint.is_empty() {
+            return Ok(());
+        }
+        if backend.stage == BackendStage::Asr {
+            let wav = encode_wav_f32(&vec![0.0; 16_000], 16_000)?;
+            let form = reqwest::multipart::Form::new()
+                .part(
+                    "file",
+                    reqwest::multipart::Part::bytes(wav)
+                        .file_name("warmup.wav")
+                        .mime_str("audio/wav")?,
+                )
+                .text("language", "de")
+                .text("response_format", "json")
+                .text("no_timestamps", "true");
+            let url = format!("{}/inference", endpoint.trim_end_matches('/'));
+            let response = self
+                .client
+                .post(&url)
+                .timeout(Duration::from_secs(120))
+                .multipart(form)
+                .send()
+                .await
+                .with_context(|| format!("ASR warmup POST {url}"))?;
+            if !response.status().is_success() {
+                return Err(anyhow!(
+                    "warmup for '{}' failed: HTTP {}",
+                    backend.id,
+                    response.status()
+                ));
+            }
+            let body: serde_json::Value = response.json().await?;
+            if !body.get("text").is_some_and(serde_json::Value::is_string) {
+                return Err(anyhow!(
+                    "warmup for '{}' returned no text field",
+                    backend.id
+                ));
+            }
+            return Ok(());
+        }
+        if backend.stage != BackendStage::Tts {
+            return Ok(());
+        }
+        let qwen = backend.id == "qwen3-tts-0.6b";
+        let higgs = backend.id == "higgs-tts-3-4b";
+        let vibevoice = backend.id == "vibevoice-realtime-0.5b";
+        let voice = if backend.default_voice.is_empty() {
+            "default"
+        } else {
+            backend.default_voice.as_str()
+        };
+        // CrispASR VibeVoice and Higgs prefer WAV; Qwen uses raw PCM.
+        let response_format = if higgs || vibevoice { "wav" } else { "pcm" };
+        let body = serde_json::json!({
+            "model": backend.model,
+            "input": if qwen { "Hallo." } else { "Test." },
+            "voice": voice,
+            "language": if qwen { "german" } else { "de" },
+            "response_format": response_format,
+            "max_new_tokens": if qwen { 16 } else if higgs { 256 } else { 64 }
+        });
+        let response = self
+            .client
+            .post(endpoint)
+            .timeout(Duration::from_secs(60))
+            .json(&body)
+            .send()
+            .await
+            .with_context(|| format!("warmup POST {endpoint}"))?;
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "warmup for '{}' failed: HTTP {}",
+                backend.id,
+                response.status()
+            ));
+        }
+        // Drain streaming PCM so the server sees a completed request. Qwen is
+        // only promoted after a real, non-empty, sample-aligned synthesis.
+        let bytes = response.bytes().await?;
+        validate_tts_warmup_audio(backend, &bytes)?;
+        Ok(())
+    }
+
+    async fn apply_runtime(
+        &self,
+        backend: &BackendDefinition,
+        variant: &BackendVariant,
+        endpoint: String,
+    ) -> Result<()> {
+        let mut rt = self.runtime.write().await;
+        match backend.stage {
+            BackendStage::Asr => {
+                rt.asr_id = backend.id.clone();
+                rt.cfg.whisper_url = endpoint.clone();
+            }
+            BackendStage::Tts => {
+                rt.tts_id = backend.id.clone();
+                rt.cfg.tts = TtsBackend::Http;
+                rt.cfg.tts_url = endpoint.clone();
+                rt.cfg.tts_model = backend.model.clone();
+                if backend.native_sample_rate > 0 {
+                    rt.cfg.tts_native_sample_rate = backend.native_sample_rate;
+                }
+                if !backend.default_voice.is_empty() {
+                    rt.cfg.supertonic_voice = backend.default_voice.clone();
+                }
+            }
+            BackendStage::Llm => {
+                rt.llm_id = backend.id.clone();
+                rt.cfg.llm_base_url = endpoint.clone();
+                rt.cfg.model_name = if backend.id == "external-openai" {
+                    std::env::var("S2S_LLM_EXTERNAL_MODEL")
+                        .unwrap_or_else(|_| backend.model.clone())
+                } else {
+                    backend.model.clone()
+                };
+            }
+        }
+        drop(rt);
+
+        if backend.stage == BackendStage::Asr && backend.protocol == "faster-whisper" {
+            let model = variant
+                .environment
+                .get("S2S_WHISPER_MODEL")
+                .map(String::as_str)
+                .unwrap_or(&backend.model);
+            runtime::reload_whisper_model(&endpoint, model)
+                .await
+                .map_err(|error| anyhow!("reload faster-whisper: {error:#}"))?;
+        }
+        Ok(())
+    }
+
+    async fn restore_containers(&self, snapshot: &ControllerState) -> Result<()> {
+        if !self.docker_control_enabled {
+            return Ok(());
+        }
+        let desired: HashSet<&str> = [&snapshot.asr, &snapshot.tts, &snapshot.llm]
+            .into_iter()
+            .flatten()
+            .map(|active| active.container.as_str())
+            .filter(|container| !container.is_empty())
+            .collect();
+        let mut seen = HashSet::new();
+        for backend in self.catalog.backends.iter().filter(|backend| {
+            matches!(
+                backend.stage,
+                BackendStage::Asr | BackendStage::Tts | BackendStage::Llm
+            )
+        }) {
+            for variant in &backend.variants {
+                let container = variant.container.as_str();
+                if container.is_empty()
+                    || desired.contains(container)
+                    || !seen.insert(container.to_string())
+                {
+                    continue;
+                }
+                if self.control.running(container).await.unwrap_or(false) {
+                    if let Err(error) = self.control.stop(container, Duration::from_secs(10)).await
+                    {
+                        warn!("Failed to stop rollback container {container}: {error:#}");
+                    }
+                }
+            }
+        }
+        for active in [&snapshot.asr, &snapshot.tts, &snapshot.llm]
+            .into_iter()
+            .flatten()
+        {
+            if active.container.is_empty() {
+                continue;
+            }
+            let backend = self
+                .catalog
+                .find(&active.backend_id)
+                .ok_or_else(|| anyhow!("rollback backend '{}' missing", active.backend_id))?;
+            let variant = backend
+                .variants
+                .iter()
+                .find(|variant| variant.id == active.variant_id)
+                .ok_or_else(|| anyhow!("rollback variant '{}' missing", active.variant_id))?;
+            self.control
+                .validate(
+                    &active.container,
+                    backend.stage,
+                    &active.backend_id,
+                    &variant.image,
+                )
+                .await?;
+            self.control
+                .start(&active.container)
+                .await
+                .with_context(|| format!("restore managed container {}", active.container))?;
+            self.wait_for_health(backend, variant, &active.endpoint)
+                .await
+                .with_context(|| format!("rollback health for {}", active.backend_id))?;
+            self.warm_backend(backend, &active.endpoint)
+                .await
+                .with_context(|| format!("rollback warmup for {}", active.backend_id))?;
+        }
+        Ok(())
+    }
+
+    async fn emit_transition(
+        &self,
+        stage: BackendStage,
+        phase: TransitionPhase,
+        backend_id: &str,
+        variant_id: &str,
+        message: &str,
+    ) {
+        let transition = StageTransition {
+            stage,
+            phase,
+            backend_id: backend_id.into(),
+            variant_id: variant_id.into(),
+            message: message.into(),
+        };
+        {
+            let mut state = self.state.write().await;
+            match stage {
+                BackendStage::Asr => state.asr_transition = transition.clone(),
+                BackendStage::Tts => state.tts_transition = transition.clone(),
+                BackendStage::Llm => state.llm_transition = transition.clone(),
+            }
+        }
+        let _ = self.events.send(LabEvent::StackTransition {
+            stage,
+            phase,
+            backend_id: backend_id.into(),
+            variant_id: variant_id.into(),
+            message: message.into(),
+        });
+    }
+
+    async fn monitor_external_llm(self) {
+        let external_url = std::env::var("S2S_LLM_EXTERNAL_URL").unwrap_or_else(|_| {
+            self.runtime
+                .try_read()
+                .map(|runtime| runtime.cfg.llm_base_url.clone())
+                .unwrap_or_default()
+        });
+        if external_url.is_empty() {
+            warn!("LLM failover monitor disabled: no external URL configured");
+            return;
+        }
+        let external_model = std::env::var("S2S_LLM_EXTERNAL_MODEL").unwrap_or_else(|_| {
+            self.runtime
+                .try_read()
+                .map(|runtime| runtime.cfg.model_name.clone())
+                .unwrap_or_else(|_| "external".into())
+        });
+        let Some(fallback) = self.catalog.find("local-fallback").cloned() else {
+            warn!("LLM failover monitor disabled: local-fallback missing from catalog");
+            return;
+        };
+        let Some(variant) = resolve_variant(&fallback, &self.hardware).cloned() else {
+            warn!("LLM failover monitor: no compatible local fallback variant");
+            return;
+        };
+        let fallback_endpoint = endpoint_for(&variant, self.hardware.in_container);
+        let mut failures = 0u8;
+        let mut successes = 0u8;
+        let mut using_fallback = false;
+
+        loop {
+            if self.desired_llm.read().await.as_str() != "external-openai" {
+                failures = 0;
+                successes = 0;
+                using_fallback = false;
+                tokio::time::sleep(Duration::from_secs(15)).await;
+                continue;
+            }
+            let external_ok = self.llm_healthy(&external_url).await;
+            if external_ok {
+                failures = 0;
+                successes = successes.saturating_add(1);
+                let pipeline_idle = self.runtime.read().await.turns.is_idle();
+                if using_fallback && successes >= 2 && pipeline_idle {
+                    {
+                        let mut runtime = self.runtime.write().await;
+                        runtime.cfg.llm_base_url = external_url.clone();
+                        runtime.cfg.model_name = external_model.clone();
+                        runtime.llm_id = "external-openai".into();
+                    }
+                    let _ = self.events.send(LabEvent::BackendHealth {
+                        stage: BackendStage::Llm,
+                        backend_id: "external-openai".into(),
+                        ok: true,
+                        message: "external LLM restored".into(),
+                    });
+                    // Existing requests hold a Config snapshot; a short grace
+                    // period avoids stopping the fallback while it is finishing.
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    if self.docker_control_enabled && !variant.container.is_empty() {
+                        if let Err(error) = self
+                            .control
+                            .stop(&variant.container, Duration::from_secs(10))
+                            .await
+                        {
+                            warn!("Failed to stop LLM fallback: {error:#}");
+                        }
+                    }
+                    using_fallback = false;
+                }
+            } else {
+                successes = 0;
+                failures = failures.saturating_add(1);
+                if !using_fallback && failures >= 2 {
+                    let activation = async {
+                        if self.docker_control_enabled && !variant.container.is_empty() {
+                            self.control
+                                .validate(
+                                    &variant.container,
+                                    BackendStage::Llm,
+                                    &fallback.id,
+                                    &variant.image,
+                                )
+                                .await?;
+                            self.control.start(&variant.container).await?;
+                        }
+                        self.wait_for_health(&fallback, &variant, &fallback_endpoint)
+                            .await?;
+                        self.apply_runtime(&fallback, &variant, fallback_endpoint.clone())
+                            .await
+                    }
+                    .await;
+                    match activation {
+                        Ok(()) => {
+                            using_fallback = true;
+                            let _ = self.events.send(LabEvent::BackendHealth {
+                                stage: BackendStage::Llm,
+                                backend_id: fallback.id.clone(),
+                                ok: true,
+                                message: "external LLM unavailable; local fallback active".into(),
+                            });
+                        }
+                        Err(error) => warn!("Unable to activate LLM fallback: {error:#}"),
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(15)).await;
+        }
+    }
+
+    async fn llm_healthy(&self, base_url: &str) -> bool {
+        let url = format!("{}/models", base_url.trim_end_matches('/'));
+        matches!(
+            self.client
+                .get(url)
+                .timeout(Duration::from_secs(3))
+                .send()
+                .await,
+            Ok(response) if response.status().is_success()
+        )
+    }
+}
+
+fn resolve_requested_voice(
+    catalog: &BackendCatalog,
+    tts_id: &str,
+    requested_voice: &str,
+) -> Result<String> {
+    let backend = catalog
+        .find(tts_id)
+        .ok_or_else(|| anyhow!("unknown TTS backend id '{tts_id}'"))?;
+    if backend.stage != BackendStage::Tts {
+        return Err(anyhow!("backend '{tts_id}' is not a TTS backend"));
+    }
+
+    let requested_voice = requested_voice.trim();
+    if requested_voice.is_empty() {
+        return Err(anyhow!("voice must not be empty"));
+    }
+    let voice = backend
+        .voices
+        .iter()
+        .find(|voice| voice.eq_ignore_ascii_case(requested_voice))
+        .or_else(|| {
+            (!backend.default_voice.is_empty()
+                && backend.default_voice.eq_ignore_ascii_case(requested_voice))
+            .then_some(&backend.default_voice)
+        });
+    voice.cloned().ok_or_else(|| {
+        let available = if backend.voices.is_empty() {
+            backend.default_voice.clone()
+        } else {
+            backend.voices.join(", ")
+        };
+        anyhow!(
+            "voice '{requested_voice}' is not available for '{tts_id}' (available: {available})"
+        )
+    })
+}
+
+fn validate_tts_warmup_audio(backend: &BackendDefinition, bytes: &[u8]) -> Result<()> {
+    if backend.id == "qwen3-tts-0.6b" && (bytes.is_empty() || bytes.len() % 2 != 0) {
+        return Err(anyhow!(
+            "warmup for '{}' returned invalid PCM payload ({} bytes)",
+            backend.id,
+            bytes.len()
+        ));
+    }
+    Ok(())
+}
+
+async fn model_installation_state(backend: &BackendDefinition) -> Result<(bool, u64)> {
+    model_installation_state_at(backend, &models_root()).await
+}
+
+fn models_root() -> PathBuf {
+    PathBuf::from(std::env::var("S2S_MODELS_DIR").unwrap_or_else(|_| "/models".into()))
+}
+
+async fn model_installation_state_at(
+    backend: &BackendDefinition,
+    root: &Path,
+) -> Result<(bool, u64)> {
+    if backend.bundled {
+        let total = backend.artifacts.iter().map(|artifact| artifact.size).sum();
+        return Ok((true, total));
+    }
+    let mut installed = !backend.artifacts.is_empty();
+    let mut downloaded = 0u64;
+    for artifact in &backend.artifacts {
+        let path = root.join(&artifact.path);
+        match tokio::fs::metadata(&path).await {
+            Ok(metadata) if metadata.is_file() => {
+                let length = metadata.len();
+                downloaded = downloaded.saturating_add(if artifact.size > 0 {
+                    length.min(artifact.size)
+                } else {
+                    length
+                });
+                if artifact.size > 0 && length != artifact.size {
+                    installed = false;
+                }
+            }
+            Ok(_) => installed = false,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => installed = false,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok((installed, downloaded))
+}
+
+/// Bytes already present in `.part` files (for resume progress display).
+async fn partial_download_bytes(backend: &BackendDefinition) -> Result<u64> {
+    let root = models_root();
+    let mut total = 0u64;
+    for artifact in &backend.artifacts {
+        let final_path = root.join(&artifact.path);
+        if artifact_matches(&final_path, artifact.size, &artifact.sha256).await? {
+            continue;
+        }
+        let part = part_path(&final_path)?;
+        match tokio::fs::metadata(&part).await {
+            Ok(meta) if meta.is_file() => {
+                let len = meta.len();
+                total = total.saturating_add(if artifact.size > 0 {
+                    len.min(artifact.size)
+                } else {
+                    len
+                });
+            }
+            Ok(_) | Err(_) => {}
+        }
+    }
+    Ok(total)
+}
+
+fn is_transient_download_error(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}").to_ascii_lowercase();
+    text.contains("timed out")
+        || text.contains("timeout")
+        || text.contains("connection reset")
+        || text.contains("connection refused")
+        || text.contains("broken pipe")
+        || text.contains("error decoding response body")
+        || text.contains("error sending request")
+        || text.contains("incomplete")
+        || text.contains("temporarily")
+        || text.contains("503")
+        || text.contains("429")
+        || text.contains("502")
+        || text.contains("504")
+}
+
+async fn hash_file_into(path: &Path, hasher: &mut Sha256) -> Result<()> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .with_context(|| format!("open partial for hash {}", path.display()))?;
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        let read = file.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(())
+}
+
+async fn hash_file_hex(path: &Path) -> Result<String> {
+    let mut hasher = Sha256::new();
+    hash_file_into(path, &mut hasher).await?;
+    Ok(hex::encode(hasher.finalize()))
+}
+
+async fn remove_model_artifacts(backend: &BackendDefinition) -> Result<()> {
+    remove_model_artifacts_at(backend, &models_root()).await
+}
+
+async fn remove_model_artifacts_at(backend: &BackendDefinition, root: &Path) -> Result<()> {
+    for artifact in &backend.artifacts {
+        let path = root.join(&artifact.path);
+        for target in [path.clone(), part_path(&path)?] {
+            match tokio::fs::remove_file(&target).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("delete model file {}", target.display()));
+                }
+            }
+        }
+        let mut parent = path.parent();
+        while let Some(directory) = parent {
+            if directory == root {
+                break;
+            }
+            match tokio::fs::remove_dir(directory).await {
+                Ok(()) => parent = directory.parent(),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn artifact_matches(path: &Path, expected_size: u64, expected_sha256: &str) -> Result<bool> {
+    let metadata = match tokio::fs::metadata(path).await {
+        Ok(metadata) if metadata.is_file() => metadata,
+        Ok(_) => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if expected_size > 0 && metadata.len() != expected_size {
+        return Ok(false);
+    }
+    if expected_sha256.is_empty() {
+        return Ok(true);
+    }
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1024 * 1024];
+    loop {
+        let read = tokio::io::AsyncReadExt::read(&mut file, &mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()).eq_ignore_ascii_case(expected_sha256))
+}
+
+fn part_path(path: &Path) -> Result<PathBuf> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("invalid artifact filename '{}'", path.display()))?;
+    Ok(path.with_file_name(format!("{file_name}.part")))
+}
+
+async fn replace_artifact(part_path: &Path, target_path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    if tokio::fs::try_exists(target_path).await? {
+        // Docker reference builds run on Linux, where rename replaces atomically.
+        // Windows cannot replace an existing file with std::fs::rename.
+        tokio::fs::remove_file(target_path).await?;
+    }
+    tokio::fs::rename(part_path, target_path)
+        .await
+        .with_context(|| {
+            format!(
+                "activate artifact {} as {}",
+                part_path.display(),
+                target_path.display()
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use clap::Parser;
+    use std::collections::BTreeMap;
+
+    #[derive(Default)]
+    struct FakeControl {
+        running: Mutex<HashSet<String>>,
+        actions: Mutex<Vec<String>>,
+        fail_start: Mutex<HashSet<String>>,
+    }
+
+    #[async_trait]
+    impl ContainerControl for FakeControl {
+        async fn validate(
+            &self,
+            _container: &str,
+            _stage: BackendStage,
+            _backend_id: &str,
+            _image: &str,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn start(&self, container: &str) -> Result<()> {
+            self.actions.lock().await.push(format!("start:{container}"));
+            if self.fail_start.lock().await.contains(container) {
+                return Err(anyhow!("injected start failure for {container}"));
+            }
+            self.running.lock().await.insert(container.into());
+            Ok(())
+        }
+
+        async fn stop(&self, container: &str, _timeout: Duration) -> Result<()> {
+            self.actions.lock().await.push(format!("stop:{container}"));
+            self.running.lock().await.remove(container);
+            Ok(())
+        }
+
+        async fn running(&self, container: &str) -> Result<bool> {
+            Ok(self.running.lock().await.contains(container))
+        }
+    }
+
+    fn test_config() -> Config {
+        Config::try_parse_from(["s2s-vulkan", "--skip-health"]).unwrap()
+    }
+
+    fn test_catalog(endpoint: String) -> BackendCatalog {
+        BackendCatalog {
+            schema_version: 1,
+            presets: Vec::new(),
+            backends: vec![BackendDefinition {
+                id: "asr-a".into(),
+                stage: BackendStage::Asr,
+                name: "ASR A".into(),
+                tag: String::new(),
+                description: String::new(),
+                protocol: "mock".into(),
+                model: "a".into(),
+                default_voice: String::new(),
+                voices: vec![],
+                native_sample_rate: 0,
+                languages: vec![],
+                resources: crate::registry::ResourceEstimate {
+                    vram_gb: 1.0,
+                    ram_gb: 1.0,
+                    stars: Default::default(),
+                },
+                bundled: true,
+                artifacts: vec![],
+                variants: vec![BackendVariant {
+                    id: "asr-a-cpu".into(),
+                    accelerator: "cpu".into(),
+                    vendors: vec!["any".into()],
+                    platforms: vec![std::env::consts::OS.into()],
+                    stable: true,
+                    device_match: vec![],
+                    endpoint: endpoint.clone(),
+                    native_endpoint: endpoint,
+                    container: "asr-a".into(),
+                    image: "test/asr:a".into(),
+                    health_path: "/health".into(),
+                    environment: BTreeMap::new(),
+                }],
+            }],
+        }
+    }
+
+    fn backend(id: &str, stage: BackendStage, container: &str) -> BackendDefinition {
+        BackendDefinition {
+            id: id.into(),
+            stage,
+            name: id.into(),
+            tag: String::new(),
+            description: String::new(),
+            protocol: "mock".into(),
+            model: id.into(),
+            default_voice: String::new(),
+            voices: vec![],
+            native_sample_rate: 0,
+            languages: vec![],
+            resources: crate::registry::ResourceEstimate {
+                vram_gb: 1.0,
+                ram_gb: 1.0,
+                stars: Default::default(),
+            },
+            bundled: true,
+            artifacts: vec![],
+            variants: vec![BackendVariant {
+                id: format!("{id}-cpu"),
+                accelerator: "cpu".into(),
+                vendors: vec!["any".into()],
+                platforms: vec![std::env::consts::OS.into()],
+                stable: true,
+                device_match: vec![],
+                endpoint: String::new(),
+                native_endpoint: String::new(),
+                container: container.into(),
+                image: format!("test/{id}:latest"),
+                health_path: "/health".into(),
+                environment: BTreeMap::new(),
+            }],
+        }
+    }
+
+    fn switch_catalog() -> BackendCatalog {
+        BackendCatalog {
+            schema_version: 1,
+            presets: Vec::new(),
+            backends: vec![
+                backend("asr-a", BackendStage::Asr, "asr-a"),
+                backend("asr-b", BackendStage::Asr, "asr-b"),
+                backend("tts-fail", BackendStage::Tts, "tts-fail"),
+            ],
+        }
+    }
+
+    fn cpu_hardware() -> HardwareProfile {
+        HardwareProfile {
+            vendor: "unknown".into(),
+            device_name: "CPU".into(),
+            accelerators: vec!["cpu".into()],
+            platform: std::env::consts::OS.into(),
+            in_container: false,
+            allow_experimental: false,
+        }
+    }
+
+    #[test]
+    fn stack_request_rejects_browser_supplied_docker_parameters() {
+        let value = r#"{"asr_id":"fw-base","image":"attacker/image","command":["sh"]}"#;
+        assert!(serde_json::from_str::<ActivateStackRequest>(value).is_err());
+    }
+
+    #[tokio::test]
+    async fn voice_only_activation_validates_qwen_catalog_and_preserves_runtime_on_error() {
+        let runtime = runtime::runtime_from(test_config());
+        {
+            let mut rt = runtime.write().await;
+            rt.tts_id = "qwen3-tts-0.6b".into();
+            rt.cfg.supertonic_voice = "Aiden".into();
+        }
+        let mut qwen = backend("qwen3-tts-0.6b", BackendStage::Tts, "");
+        qwen.default_voice = "Aiden".into();
+        qwen.voices = vec!["Aiden".into(), "Serena".into(), "Vivian".into()];
+        let catalog = BackendCatalog {
+            schema_version: 1,
+            presets: Vec::new(),
+            backends: vec![qwen],
+        };
+        let lab = Arc::new(
+            LabController::with_control(
+                catalog,
+                cpu_hardware(),
+                runtime.clone(),
+                Arc::new(FakeControl::default()),
+                false,
+            )
+            .unwrap(),
+        );
+        lab.reconcile_active_stack().await;
+
+        let turns = runtime.read().await.turns.clone();
+        let active_turn = turns.try_acquire().expect("active turn");
+        let voice_lab = lab.clone();
+        let selecting = tokio::spawn(async move {
+            voice_lab
+                .activate(ActivateStackRequest {
+                    voice: Some("serena".into()),
+                    ..ActivateStackRequest::default()
+                })
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!selecting.is_finished());
+        drop(active_turn);
+        let selected = tokio::time::timeout(Duration::from_millis(200), selecting)
+            .await
+            .expect("voice update should finish after turn release")
+            .unwrap();
+        assert!(selected.ok, "{}", selected.message);
+        assert_eq!(selected.runtime.voice, "Serena");
+
+        let rejected = lab
+            .activate(ActivateStackRequest {
+                voice: Some("not-a-qwen-voice".into()),
+                ..ActivateStackRequest::default()
+            })
+            .await;
+        assert!(!rejected.ok);
+        assert!(rejected.message.contains("not available"));
+        assert_eq!(runtime.read().await.cfg.supertonic_voice, "Serena");
+    }
+
+    #[test]
+    fn managed_target_requires_exact_registry_metadata() {
+        let inspect = serde_json::json!({
+            "Config": {
+                "Image": "registry/asr:sha",
+                "Labels": {
+                    "s2s.lab.managed": "true",
+                    "stage": "asr",
+                    "backend-id": "fw-base"
+                }
+            }
+        });
+        assert!(validate_managed_target(
+            &inspect,
+            "asr",
+            BackendStage::Asr,
+            "fw-base",
+            "registry/asr:sha"
+        )
+        .is_ok());
+        assert!(validate_managed_target(
+            &inspect,
+            "asr",
+            BackendStage::Asr,
+            "fw-base",
+            "attacker/asr:latest"
+        )
+        .is_err());
+        assert!(validate_managed_target(
+            &inspect,
+            "asr",
+            BackendStage::Tts,
+            "fw-base",
+            "registry/asr:sha"
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn unknown_backend_does_not_mutate_runtime() {
+        let runtime = runtime::runtime_from(test_config());
+        let before = {
+            let guard = runtime.read().await;
+            runtime::status_of(&guard)
+        };
+        let control = Arc::new(FakeControl::default());
+        let lab = LabController::with_control(
+            test_catalog("http://127.0.0.1:9".into()),
+            cpu_hardware(),
+            runtime.clone(),
+            control,
+            false,
+        )
+        .unwrap();
+        let result = lab
+            .activate(ActivateStackRequest {
+                asr_id: Some("missing".into()),
+                tts_id: None,
+                llm_id: None,
+                voice: None,
+            })
+            .await;
+        let after = {
+            let guard = runtime.read().await;
+            runtime::status_of(&guard)
+        };
+        assert!(!result.ok);
+        assert_eq!(before.asr, after.asr);
+        assert_eq!(before.whisper_url, after.whisper_url);
+    }
+
+    #[tokio::test]
+    async fn switch_keeps_exactly_one_asr_container_running() {
+        let runtime = runtime::runtime_from(test_config());
+        {
+            let mut rt = runtime.write().await;
+            rt.asr_id = "asr-a".into();
+        }
+        let control = Arc::new(FakeControl::default());
+        control.running.lock().await.insert("asr-a".into());
+        let lab = LabController::with_control(
+            switch_catalog(),
+            cpu_hardware(),
+            runtime,
+            control.clone(),
+            true,
+        )
+        .unwrap();
+        lab.reconcile_active_stack().await;
+
+        let result = lab
+            .activate(ActivateStackRequest {
+                asr_id: Some("asr-b".into()),
+                tts_id: None,
+                llm_id: None,
+                voice: None,
+            })
+            .await;
+
+        assert!(result.ok, "{}", result.message);
+        assert_eq!(
+            control.running.lock().await.clone(),
+            HashSet::from(["asr-b".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn switching_to_native_backend_stops_previous_stage_container() {
+        let runtime = runtime::runtime_from(test_config());
+        {
+            let mut rt = runtime.write().await;
+            rt.tts_id = "tts-old".into();
+        }
+        let control = Arc::new(FakeControl::default());
+        control.running.lock().await.insert("tts-old".into());
+        let catalog = BackendCatalog {
+            schema_version: 1,
+            presets: Vec::new(),
+            backends: vec![
+                backend("tts-old", BackendStage::Tts, "tts-old"),
+                backend("tts-native", BackendStage::Tts, ""),
+            ],
+        };
+        let lab =
+            LabController::with_control(catalog, cpu_hardware(), runtime, control.clone(), true)
+                .unwrap();
+        lab.reconcile_active_stack().await;
+
+        let result = lab
+            .activate(ActivateStackRequest {
+                asr_id: None,
+                tts_id: Some("tts-native".into()),
+                llm_id: None,
+                voice: None,
+            })
+            .await;
+
+        assert!(result.ok, "{}", result.message);
+        assert!(control.running.lock().await.is_empty());
+        assert!(control
+            .actions
+            .lock()
+            .await
+            .contains(&"stop:tts-old".to_string()));
+    }
+
+    #[test]
+    fn qwen_warmup_requires_non_empty_aligned_pcm() {
+        let qwen = backend("qwen3-tts-0.6b", BackendStage::Tts, "");
+        assert!(validate_tts_warmup_audio(&qwen, &[]).is_err());
+        assert!(validate_tts_warmup_audio(&qwen, &[0]).is_err());
+        assert!(validate_tts_warmup_audio(&qwen, &[0, 0]).is_ok());
+    }
+
+    #[tokio::test]
+    async fn reconcile_discovers_running_backend_after_controller_restart() {
+        let runtime = runtime::runtime_from(test_config());
+        let control = Arc::new(FakeControl::default());
+        control.running.lock().await.insert("asr-b".into());
+        let lab = LabController::with_control(
+            switch_catalog(),
+            cpu_hardware(),
+            runtime.clone(),
+            control,
+            true,
+        )
+        .unwrap();
+
+        lab.reconcile_active_stack().await;
+
+        assert_eq!(runtime.read().await.asr_id, "asr-b");
+        assert_eq!(
+            lab.status().await.asr.map(|active| active.backend_id),
+            Some("asr-b".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn switch_waits_for_active_turn_and_reopens_gate_afterwards() {
+        let runtime = runtime::runtime_from(test_config());
+        {
+            let mut rt = runtime.write().await;
+            rt.asr_id = "asr-a".into();
+        }
+        let turns = runtime.read().await.turns.clone();
+        let active_turn = turns.try_acquire().expect("active turn");
+        let control = Arc::new(FakeControl::default());
+        control.running.lock().await.insert("asr-a".into());
+        let lab =
+            LabController::with_control(switch_catalog(), cpu_hardware(), runtime, control, true)
+                .unwrap();
+        lab.reconcile_active_stack().await;
+
+        let switching = tokio::spawn(async move {
+            lab.activate(ActivateStackRequest {
+                asr_id: Some("asr-b".into()),
+                tts_id: None,
+                llm_id: None,
+                voice: None,
+            })
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!switching.is_finished());
+        assert!(turns.try_acquire().is_none());
+        drop(active_turn);
+        let result = tokio::time::timeout(Duration::from_millis(200), switching)
+            .await
+            .expect("switch should finish after turn release")
+            .unwrap();
+        assert!(result.ok, "{}", result.message);
+        assert!(turns.try_acquire().is_some());
+    }
+
+    #[tokio::test]
+    async fn failed_second_stage_rolls_back_runtime_and_containers() {
+        let runtime = runtime::runtime_from(test_config());
+        {
+            let mut rt = runtime.write().await;
+            rt.asr_id = "asr-a".into();
+        }
+        let control = Arc::new(FakeControl::default());
+        control.running.lock().await.insert("asr-a".into());
+        control.fail_start.lock().await.insert("tts-fail".into());
+        let lab = LabController::with_control(
+            switch_catalog(),
+            cpu_hardware(),
+            runtime.clone(),
+            control.clone(),
+            true,
+        )
+        .unwrap();
+        lab.reconcile_active_stack().await;
+
+        let result = lab
+            .activate(ActivateStackRequest {
+                asr_id: Some("asr-b".into()),
+                tts_id: Some("tts-fail".into()),
+                llm_id: None,
+                voice: None,
+            })
+            .await;
+
+        assert!(!result.ok);
+        assert_eq!(runtime.read().await.asr_id, "asr-a");
+        assert_eq!(
+            control.running.lock().await.clone(),
+            HashSet::from(["asr-a".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn bundled_model_never_downloads_or_deletes() {
+        let runtime = runtime::runtime_from(test_config());
+        let lab = LabController::with_control(
+            test_catalog("http://127.0.0.1:9".into()),
+            cpu_hardware(),
+            runtime,
+            Arc::new(FakeControl::default()),
+            false,
+        )
+        .unwrap();
+
+        let download = lab.start_model_download("asr-a").await.unwrap();
+        assert_eq!(download.state, "bundled");
+        assert!(lab.delete_model("asr-a").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn idle_unload_stops_containers_after_last_session_leaves() {
+        std::env::set_var("S2S_LAB_IDLE_UNLOAD_SECS", "1");
+        let runtime = runtime::runtime_from(test_config());
+        {
+            let mut rt = runtime.write().await;
+            rt.asr_id = "asr-a".into();
+        }
+        let control = Arc::new(FakeControl::default());
+        control.running.lock().await.insert("asr-a".into());
+        let lab = LabController::with_control(
+            switch_catalog(),
+            cpu_hardware(),
+            runtime,
+            control.clone(),
+            true,
+        )
+        .unwrap();
+        lab.reconcile_active_stack().await;
+        assert!(control.running.lock().await.contains("asr-a"));
+
+        lab.session_connected().await;
+        lab.session_disconnected().await;
+        // Timer is 1s; wait a bit longer for unload.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+
+        assert!(
+            !control.running.lock().await.contains("asr-a"),
+            "ASR container should stop after idle unload"
+        );
+        assert!(
+            control
+                .actions
+                .lock()
+                .await
+                .iter()
+                .any(|action| action == "stop:asr-a")
+        );
+
+        // Reconnect restarts parked models.
+        lab.session_connected().await;
+        assert!(control.running.lock().await.contains("asr-a"));
+        std::env::remove_var("S2S_LAB_IDLE_UNLOAD_SECS");
+    }
+
+    #[tokio::test]
+    async fn optional_model_cleanup_only_removes_catalog_artifacts() {
+        let root = std::env::temp_dir().join(format!("s2s-model-test-{}", uuid::Uuid::new_v4()));
+        let model_path = root.join("optional/model.bin");
+        let part = root.join("optional/model.bin.part");
+        let unrelated = root.join("optional/keep.txt");
+        tokio::fs::create_dir_all(model_path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&model_path, [1u8, 2, 3, 4]).await.unwrap();
+        tokio::fs::write(&part, [9u8]).await.unwrap();
+        tokio::fs::write(&unrelated, b"keep").await.unwrap();
+
+        let mut optional = backend("optional", BackendStage::Asr, "optional");
+        optional.bundled = false;
+        optional.artifacts = vec![crate::registry::ModelArtifact {
+            source: "https://example.invalid/model.bin".into(),
+            path: "optional/model.bin".into(),
+            sha256: String::new(),
+            size: 4,
+        }];
+
+        assert_eq!(
+            model_installation_state_at(&optional, &root).await.unwrap(),
+            (true, 4)
+        );
+        remove_model_artifacts_at(&optional, &root).await.unwrap();
+        assert!(!tokio::fs::try_exists(model_path).await.unwrap());
+        assert!(!tokio::fs::try_exists(part).await.unwrap());
+        assert!(tokio::fs::try_exists(unrelated).await.unwrap());
+
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+}

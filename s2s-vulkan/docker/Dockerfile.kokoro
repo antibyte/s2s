@@ -1,0 +1,15 @@
+FROM python:3.12-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl libsndfile1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir \
+        fastapi uvicorn soundfile numpy kokoro-onnx
+
+WORKDIR /app
+COPY scripts/tts_kokoro_server.py /app/tts_kokoro_server.py
+
+ENV S2S_KOKORO_VOICE=af_bella
+EXPOSE 8084
+
+CMD ["sh", "-c", "exec python -u /app/tts_kokoro_server.py --host 0.0.0.0 --port 8084 --backend onnx --model-dir /models/kokoro --speaker \"${S2S_KOKORO_VOICE}\""]

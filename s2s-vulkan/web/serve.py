@@ -119,28 +119,128 @@ def ensure_aiohttp() -> None:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "aiohttp", "-q"])
 
 
-async def main_async(host: str, port: int, backend: str) -> None:
+def backend_reachable(host: str, port: int, timeout: float = 1.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+async def main_async(host: str, port: int, backend: str, backend_ws_path: str) -> None:
     ensure_aiohttp()
     ensure_certs()
 
-    from aiohttp import ClientSession, WSMsgType, web
+    from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 
-    backend_ws = f"ws://{backend}"
+    if backend_ws_path and not backend_ws_path.startswith("/"):
+        raise ValueError("--backend-ws-path must be empty or start with '/'")
+    backend_ws = f"ws://{backend}{backend_ws_path}"
+    backend_http = f"http://{backend}"
+    if ":" in backend and not backend.startswith("["):
+        b_host, b_port_s = backend.rsplit(":", 1)
+        b_port = int(b_port_s)
+    else:
+        b_host, b_port = backend, 8765
 
     async def index(_request: web.Request) -> web.FileResponse:
         return web.FileResponse(WEB_DIR / "index.html")
 
-    async def ws_proxy(request: web.Request) -> web.WebSocketResponse:
-        """Browser wss://…/ws  ↔  plain ws://backend"""
+    async def health(_request: web.Request) -> web.Response:
+        up = backend_reachable(b_host, b_port)
+        body = {
+            "proxy": "ok",
+            "backend": backend,
+            "backend_up": up,
+        }
+        return web.json_response(body, status=200 if up else 503)
+
+    async def api_proxy(request: web.Request) -> web.StreamResponse:
+        """Proxy the complete Lab API to the same backend as the WebSocket."""
+        tail = request.match_info.get("tail", "")
+        target = f"{backend_http}/api/{tail}"
+        if request.query_string:
+            target = f"{target}?{request.query_string}"
+        hop_by_hop = {
+            "connection",
+            "keep-alive",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "te",
+            "trailer",
+            "transfer-encoding",
+            "upgrade",
+        }
+        headers = {
+            name: value
+            for name, value in request.headers.items()
+            if name.lower() not in hop_by_hop and name.lower() != "host"
+        }
+        try:
+            timeout = ClientTimeout(total=None, sock_connect=5, sock_read=None)
+            async with ClientSession(timeout=timeout) as session:
+                async with session.request(
+                    request.method,
+                    target,
+                    headers=headers,
+                    data=request.content if request.can_read_body else None,
+                    allow_redirects=False,
+                ) as upstream:
+                    response_headers = {
+                        name: value
+                        for name, value in upstream.headers.items()
+                        if name.lower() not in hop_by_hop
+                    }
+                    response = web.StreamResponse(
+                        status=upstream.status,
+                        reason=upstream.reason,
+                        headers=response_headers,
+                    )
+                    await response.prepare(request)
+                    async for chunk in upstream.content.iter_chunked(64 * 1024):
+                        await response.write(chunk)
+                    await response.write_eof()
+                    return response
+        except Exception as error:
+            return web.json_response(
+                {
+                    "error": f"Lab API backend {backend} is unavailable",
+                    "detail": str(error),
+                },
+                status=502,
+            )
+
+    async def ws_proxy(request: web.Request) -> web.StreamResponse:
+        """Browser wss://…/ws  ↔  plain ws://backend.
+
+        Connect upstream *before* accepting the browser WS so a dead s2s
+        returns HTTP 502 instead of open→immediate close thrash in the UI.
+        """
+        peer = request.remote or "?"
+        if not backend_reachable(b_host, b_port):
+            print(
+                f"ws deny {peer}: backend {backend} not reachable",
+                file=sys.stderr,
+                flush=True,
+            )
+            return web.Response(
+                status=502,
+                text=f"s2s backend {backend} is down — start s2s-vulkan on that port",
+            )
+
         client = web.WebSocketResponse(heartbeat=30.0, max_msg_size=8 * 1024 * 1024)
         await client.prepare(request)
+        print(f"ws open  {peer} → {backend_ws}", file=sys.stderr, flush=True)
 
         try:
-            async with ClientSession() as session:
+            timeout = ClientTimeout(total=None, sock_connect=5, sock_read=None)
+            async with ClientSession(timeout=timeout) as session:
                 async with session.ws_connect(
                     backend_ws,
                     heartbeat=30.0,
                     max_msg_size=8 * 1024 * 1024,
+                    autoclose=True,
+                    autoping=True,
                 ) as upstream:
 
                     async def client_to_upstream() -> None:
@@ -170,15 +270,33 @@ async def main_async(host: str, port: int, backend: str) -> None:
                     )
                     for t in pending:
                         t.cancel()
+                        try:
+                            await t
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    for t in done:
+                        try:
+                            exc = t.exception()
+                            if exc:
+                                print(f"ws relay {peer}: {exc}", file=sys.stderr, flush=True)
+                        except (asyncio.CancelledError, asyncio.InvalidStateError):
+                            pass
         except Exception as e:
-            print(f"ws proxy error: {e}", file=sys.stderr)
+            print(f"ws proxy error {peer}: {e}", file=sys.stderr, flush=True)
             if not client.closed:
                 await client.close(code=1011, message=str(e).encode()[:120])
+        finally:
+            print(f"ws close {peer}", file=sys.stderr, flush=True)
+            if not client.closed:
+                await client.close()
         return client
 
     app = web.Application()
     app.router.add_get("/", index)
+    app.router.add_get("/health", health)
+    app.router.add_get("/healthz", health)
     app.router.add_get("/ws", ws_proxy)
+    app.router.add_route("*", "/api/{tail:.*}", api_proxy)
     app.router.add_static("/", WEB_DIR, show_index=False)
 
     ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -196,7 +314,14 @@ async def main_async(host: str, port: int, backend: str) -> None:
     for ip in ips:
         print(f"  network: https://{ip}:{port}", file=sys.stderr)
     print(f"  WSS:     wss://<host>:{port}/ws  →  {backend_ws}", file=sys.stderr)
+    print(f"  API:     https://<host>:{port}/api/ → {backend_http}/api/", file=sys.stderr)
+    print(f"  health:  https://<host>:{port}/health", file=sys.stderr)
     print("  Mic works on remote devices because the page is HTTPS.", file=sys.stderr)
+    if not backend_reachable(b_host, b_port):
+        print(
+            f"  WARNING: backend {backend} is NOT listening right now",
+            file=sys.stderr,
+        )
     print("", file=sys.stderr)
 
     while True:
@@ -210,11 +335,18 @@ def main() -> None:
     p.add_argument(
         "--backend",
         default="127.0.0.1:8765",
-        help="s2s-vulkan websocket host:port (plain WS)",
+        help="s2s Lab backend host:port",
+    )
+    p.add_argument(
+        "--backend-ws-path",
+        default="",
+        help="upstream WebSocket path, for example /ws for the Docker web gateway",
     )
     args = p.parse_args()
     try:
-        asyncio.run(main_async(args.host, args.port, args.backend))
+        asyncio.run(
+            main_async(args.host, args.port, args.backend, args.backend_ws_path)
+        )
     except KeyboardInterrupt:
         pass
 

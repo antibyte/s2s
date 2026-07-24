@@ -115,13 +115,8 @@ pub fn resample_f32(input: &[f32], from_sr: u32, to_sr: u32) -> Result<Vec<f32>>
         window: WindowFunction::BlackmanHarris2,
     };
 
-    let mut resampler = SincFixedIn::<f32>::new(
-        to_sr as f64 / from_sr as f64,
-        2.0,
-        params,
-        input.len(),
-        1,
-    )?;
+    let mut resampler =
+        SincFixedIn::<f32>::new(to_sr as f64 / from_sr as f64, 2.0, params, input.len(), 1)?;
 
     let waves_in = vec![input.to_vec()];
     let waves_out = resampler.process(&waves_in, None)?;

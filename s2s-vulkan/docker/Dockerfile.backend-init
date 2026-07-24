@@ -6,6 +6,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY docker/download-models.sh /usr/local/bin/download-models.sh
 RUN chmod +x /usr/local/bin/download-models.sh
 ENV S2S_MODELS_DIR=/models \
-    S2S_DOWNLOAD_MODELS=auto
+    S2S_DOWNLOAD_MODELS=false
 VOLUME ["/models"]
 ENTRYPOINT ["/usr/local/bin/download-models.sh"]

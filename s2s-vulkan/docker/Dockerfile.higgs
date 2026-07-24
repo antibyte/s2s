@@ -1,0 +1,29 @@
+# Higgs TTS 3 4B via SGLang-Omni (OpenAI-compatible /v1/audio/speech).
+# Official stack: https://huggingface.co/bosonai/higgs-tts-3-4b
+#
+# Build (NVIDIA host + toolkit):
+#   docker build -f docker/Dockerfile.higgs -t s2s-tts-higgs:local .
+#
+# Weights are expected under /models/higgs-tts-3-4b (Lab download or hf download).
+
+FROM lmsysorg/sglang-omni:dev
+
+USER root
+WORKDIR /app
+
+COPY docker/higgs-entrypoint.sh /app/higgs-entrypoint.sh
+RUN chmod +x /app/higgs-entrypoint.sh \
+    && (command -v sgl-omni >/dev/null 2>&1 \
+        || command -v sglang-omni >/dev/null 2>&1 \
+        || python -c "import sglang_omni" 2>/dev/null \
+        || echo "WARN: sgl-omni not verified at build time; entrypoint will probe at runtime")
+
+ENV HIGGS_MODEL_PATH=/models/higgs-tts-3-4b \
+    HIGGS_PORT=8086 \
+    HIGGS_HOST=0.0.0.0 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+EXPOSE 8086
+
+ENTRYPOINT ["/app/higgs-entrypoint.sh"]

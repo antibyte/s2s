@@ -11,6 +11,8 @@ pub struct TurnId {
     pub id: String,
     #[allow(dead_code)]
     pub revision: u32,
+    #[allow(dead_code)]
+    lease: Option<std::sync::Arc<crate::runtime::TurnLease>>,
 }
 
 impl TurnId {
@@ -19,7 +21,12 @@ impl TurnId {
         Self {
             id: format!("turn_{n}"),
             revision: 0,
+            lease: None,
         }
+    }
+
+    pub fn attach_lease(&mut self, lease: std::sync::Arc<crate::runtime::TurnLease>) {
+        self.lease = Some(lease);
     }
 }
 
@@ -48,6 +55,7 @@ pub struct Transcription {
     pub language: Option<String>,
     pub turn: Option<TurnId>,
     pub partial: bool,
+    pub speech_end_at: Instant,
 }
 
 /// One streamed sentence/chunk from the LLM, ready for TTS.
@@ -57,6 +65,7 @@ pub struct LlmChunk {
     pub language: Option<String>,
     pub turn: Option<TurnId>,
     pub is_final: bool,
+    pub speech_end_at: Instant,
 }
 
 /// Synthesized PCM audio for playback / client (i16 mono).
@@ -69,17 +78,78 @@ pub struct AudioOut {
     pub response_done: bool,
 }
 
-/// Side-channel UI/debug events (reserved for realtime captions / UI).
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
+/// Side-channel UI/debug events (JSON text frames on the lab WebSocket).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum PipelineEvent {
-    SpeechStarted { turn: Option<TurnId> },
-    SpeechStopped { turn: Option<TurnId>, duration_ms: u64 },
-    PartialTranscript { text: String, turn: Option<TurnId> },
-    FinalTranscript { text: String, turn: Option<TurnId> },
-    LlmToken { text: String },
-    ResponseDone { turn: Option<TurnId> },
-    Error { stage: String, message: String },
+    #[allow(dead_code)]
+    SpeechStarted {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn: Option<String>,
+    },
+    #[allow(dead_code)]
+    SpeechStopped {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn: Option<String>,
+        duration_ms: u64,
+    },
+    PartialTranscript {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn: Option<String>,
+    },
+    FinalTranscript {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        language: Option<String>,
+    },
+    LlmChunk {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn: Option<String>,
+    },
+    LlmFull {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn: Option<String>,
+    },
+    ResponseDone {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn: Option<String>,
+    },
+    Metrics {
+        stage: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn: Option<String>,
+        values: serde_json::Value,
+    },
+    /// Current lab stack after connect / hot-swap.
+    Stack {
+        asr: String,
+        tts: String,
+        llm: String,
+        whisper_url: String,
+        llm_base_url: String,
+        model_name: String,
+        tts_backend: String,
+        tts_url: String,
+        voice: String,
+        language: String,
+        ok: bool,
+        message: String,
+    },
+    Error {
+        stage: String,
+        message: String,
+    },
+}
+
+impl PipelineEvent {
+    pub fn turn_id(t: &Option<TurnId>) -> Option<String> {
+        t.as_ref().map(|x| x.id.clone())
+    }
 }
 
 /// Control / lifecycle messages on any queue.

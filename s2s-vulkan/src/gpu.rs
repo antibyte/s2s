@@ -1,13 +1,22 @@
 //! Automatic GPU / accelerator detection for host and Docker.
 //!
 //! Detection order (when `--gpu auto`):
-//! 1. Explicit env (`GGML_BACKEND`, `S2S_GPU`, `CUDA_VISIBLE_DEVICES`, …)
-//! 2. NVIDIA (`nvidia-smi`, `/dev/nvidia*`, container env)
-//! 3. Vulkan devices (`vulkaninfo`, ICD files, `/dev/dri`)
-//! 4. CPU fallback
+//! 1. Explicit env (`GGML_BACKEND`, `S2S_GPU`, …)
+//! 2. NVIDIA CUDA
+//! 3. oneAPI SYCL (Intel Arc preferred when Level Zero / oneAPI present)
+//! 4. Vulkan devices
+//! 5. CPU fallback
+//!
+//! **Intel Arc policy:** Prefer SYCL over Vulkan when a SYCL runtime is
+//! detected. Vulkan on Arc can produce silently wrong GGML numerics for
+//! Qwen3-TTS; SYCL is Intel's first-class path. Override with
+//! `S2S_GPU=vulkan` or `S2S_ALLOW_INTEL_VULKAN=1`.
 //!
 //! Results are applied to process env (`GGML_BACKEND`, `S2S_GPU_KIND`, …) so
-//! child processes (whisper/llama/qwentts) and sibling containers see the same choice.
+//! child processes (whisper/llama/qwentts) see the same choice.
+//!
+//! Note: selecting SYCL only sets `GGML_BACKEND=SYCL0`. The *binary* that
+//! loads (tts-server / llama-server) must be built with `-DGGML_SYCL=ON`.
 
 use crate::config::GpuPreference;
 use serde::Serialize;
@@ -20,6 +29,7 @@ use tracing::{info, warn};
 pub enum GpuKind {
     Vulkan,
     Cuda,
+    Sycl,
     Cpu,
 }
 
@@ -28,6 +38,7 @@ impl GpuKind {
         match self {
             Self::Vulkan => "vulkan",
             Self::Cuda => "cuda",
+            Self::Sycl => "sycl",
             Self::Cpu => "cpu",
         }
     }
@@ -38,7 +49,7 @@ pub struct GpuDevice {
     pub index: u32,
     pub name: String,
     pub kind: GpuKind,
-    /// GGML-style backend id, e.g. `Vulkan0`, `CUDA0`, `CPU`.
+    /// GGML-style backend id, e.g. `Vulkan0`, `CUDA0`, `SYCL0`, `CPU`.
     pub ggml_backend: String,
     pub vendor_hint: Option<String>,
 }
@@ -50,6 +61,8 @@ pub struct GpuReport {
     pub in_container: bool,
     pub dri_nodes: Vec<String>,
     pub notes: Vec<String>,
+    /// True when Intel GPU is present and SYCL runtime looks available.
+    pub sycl_runtime_available: bool,
 }
 
 impl GpuReport {
@@ -65,6 +78,14 @@ impl GpuReport {
             std::env::set_var("S2S_GPU_KIND", self.selected.kind.as_str());
             std::env::set_var("S2S_GPU_NAME", &self.selected.name);
             std::env::set_var("S2S_GGML_BACKEND", &self.selected.ggml_backend);
+            std::env::set_var(
+                "S2S_SYCL_RUNTIME",
+                if self.sycl_runtime_available {
+                    "1"
+                } else {
+                    "0"
+                },
+            );
         }
         if self.in_container {
             unsafe {
@@ -76,11 +97,14 @@ impl GpuReport {
     pub fn log(&self) {
         info!(
             "GPU auto-detect: selected {} ({}) → GGML_BACKEND={}",
-            self.selected.name, self.selected.kind.as_str(), self.selected.ggml_backend
+            self.selected.name,
+            self.selected.kind.as_str(),
+            self.selected.ggml_backend
         );
         if self.in_container {
             info!("Running inside a container (/.dockerenv or cgroup)");
         }
+        info!("  SYCL runtime available: {}", self.sycl_runtime_available);
         for d in &self.all {
             info!(
                 "  [{}] {} kind={} ggml={}",
@@ -106,14 +130,24 @@ pub fn detect(pref: GpuPreference) -> GpuReport {
     let mut all = Vec::new();
 
     // --- NVIDIA / CUDA ---
-    let nvidia = detect_nvidia();
-    all.extend(nvidia);
+    all.extend(detect_nvidia());
 
-    // --- Vulkan (includes AMD/Intel/NVIDIA ICD path) ---
+    // --- SYCL / oneAPI (Intel) ---
+    let sycl_runtime = sycl_runtime_available();
+    let sycl_devs = detect_sycl(sycl_runtime, &mut notes);
+    for s in sycl_devs {
+        if !all.iter().any(|a| a.ggml_backend == s.ggml_backend) {
+            all.push(s);
+        }
+    }
+
+    // --- Vulkan ---
     let vulkan = detect_vulkan(&mut notes);
-    // Dedup by name roughly: keep vulkan devices even if NVIDIA also listed.
     for v in vulkan {
-        if !all.iter().any(|a| a.ggml_backend == v.ggml_backend && a.kind == v.kind) {
+        if !all
+            .iter()
+            .any(|a| a.ggml_backend == v.ggml_backend && a.kind == v.kind)
+        {
             all.push(v);
         }
     }
@@ -131,7 +165,37 @@ pub fn detect(pref: GpuPreference) -> GpuReport {
         );
     }
 
-    let selected = select_device(pref, &all, &mut notes);
+    let has_intel_gpu = all.iter().any(|d| {
+        d.vendor_hint
+            .as_deref()
+            .is_some_and(|v| v.eq_ignore_ascii_case("intel"))
+            || d.name.to_ascii_lowercase().contains("intel")
+            || d.name.to_ascii_lowercase().contains("arc")
+    });
+
+    if has_intel_gpu && !sycl_runtime {
+        let l0 = level_zero_present();
+        notes.push(if l0 {
+            "Intel GPU + Level Zero driver present, but full oneAPI/SYCL toolkit \
+             not detected (no sycl-ls / oneAPI root). Auto keeps Vulkan0 for now; \
+             install oneAPI Base Toolkit, build qwentts with -DGGML_SYCL=ON, then \
+             auto will prefer SYCL0. Until then use Supertonic for TTS."
+                .into()
+        } else {
+            "Intel GPU detected but no oneAPI/SYCL stack. Vulkan on Arc may produce \
+             wrong numerics for Qwen3-TTS — prefer Supertonic."
+                .into()
+        });
+    }
+    if has_intel_gpu && sycl_runtime {
+        notes.push(
+            "Intel GPU + oneAPI/SYCL stack detected — auto prefers SYCL0 over Vulkan0. \
+             Ensure qwentts/llama/whisper binaries are built with -DGGML_SYCL=ON."
+                .into(),
+        );
+    }
+
+    let selected = select_device(pref, &all, sycl_runtime, has_intel_gpu, &mut notes);
 
     GpuReport {
         selected,
@@ -139,18 +203,28 @@ pub fn detect(pref: GpuPreference) -> GpuReport {
         in_container,
         dri_nodes,
         notes,
+        sycl_runtime_available: sycl_runtime,
     }
 }
 
-fn select_device(pref: GpuPreference, all: &[GpuDevice], notes: &mut Vec<String>) -> GpuDevice {
+fn select_device(
+    pref: GpuPreference,
+    all: &[GpuDevice],
+    sycl_runtime: bool,
+    has_intel_gpu: bool,
+    notes: &mut Vec<String>,
+) -> GpuDevice {
     // Explicit env wins for auto mode.
     if pref == GpuPreference::Auto {
         if let Ok(backend) = std::env::var("GGML_BACKEND") {
             if !backend.is_empty() {
-                let kind = if backend.to_ascii_uppercase().contains("VULKAN") {
+                let up = backend.to_ascii_uppercase();
+                let kind = if up.contains("VULKAN") {
                     GpuKind::Vulkan
-                } else if backend.to_ascii_uppercase().contains("CUDA") {
+                } else if up.contains("CUDA") {
                     GpuKind::Cuda
+                } else if up.contains("SYCL") {
+                    GpuKind::Sycl
                 } else {
                     GpuKind::Cpu
                 };
@@ -168,8 +242,29 @@ fn select_device(pref: GpuPreference, all: &[GpuDevice], notes: &mut Vec<String>
             if s == "cpu" {
                 return cpu_device();
             }
+            if s.starts_with("sycl") {
+                if let Some(d) = all.iter().find(|d| d.kind == GpuKind::Sycl) {
+                    return d.clone();
+                }
+                // Soft device even if only runtime detected
+                if sycl_runtime {
+                    notes.push(
+                        "S2S_GPU=sycl — SYCL runtime present; using SYCL0 (binary must be SYCL-built)"
+                            .into(),
+                    );
+                    return sycl_device(0, "Intel GPU (SYCL via S2S_GPU)");
+                }
+                notes.push("S2S_GPU=sycl but no SYCL runtime/device detected".into());
+            }
             if s.starts_with("vulkan") {
                 if let Some(d) = all.iter().find(|d| d.kind == GpuKind::Vulkan) {
+                    if has_intel_gpu {
+                        notes.push(
+                            "S2S_GPU=vulkan on Intel — Qwen3-TTS quality may be wrong; \
+                             prefer S2S_GPU=sycl when available"
+                                .into(),
+                        );
+                    }
                     return d.clone();
                 }
                 notes.push("S2S_GPU=vulkan but no Vulkan device detected".into());
@@ -183,36 +278,91 @@ fn select_device(pref: GpuPreference, all: &[GpuDevice], notes: &mut Vec<String>
         }
     }
 
-    let want = match pref {
+    match pref {
         GpuPreference::Auto => {
-            // Prefer discrete NVIDIA CUDA if present, else any Vulkan, else CPU.
-            // For this project Vulkan is the primary target — prefer Vulkan first.
+            // NVIDIA: CUDA first
+            if let Some(d) = all.iter().find(|d| d.kind == GpuKind::Cuda) {
+                return d.clone();
+            }
+
+            // Intel: SYCL over Vulkan (Vulkan numerics often wrong for Qwen on Arc).
+            // Override: S2S_GPU=vulkan | S2S_GPU=sycl | GGML_BACKEND=…
+            if has_intel_gpu {
+                if let Some(d) = all.iter().find(|d| d.kind == GpuKind::Sycl) {
+                    return d.clone();
+                }
+                if sycl_runtime {
+                    notes.push(
+                        "Intel GPU: selecting SYCL0 (runtime present). \
+                         Build backends with -DGGML_SYCL=ON or fall back to Supertonic/CPU."
+                            .into(),
+                    );
+                    return sycl_device(0, "Intel GPU (SYCL preferred over Vulkan)");
+                }
+                if let Some(d) = all.iter().find(|d| d.kind == GpuKind::Vulkan) {
+                    notes.push(
+                        "Intel GPU without usable SYCL stack: falling back to Vulkan0 \
+                         (experimental for Qwen3-TTS). Install oneAPI + SYCL-built \
+                         qwentts for SYCL0, or use Supertonic TTS."
+                            .into(),
+                    );
+                    return d.clone();
+                }
+            }
+
+            // Non-Intel or remaining: any Vulkan
             if let Some(d) = all.iter().find(|d| d.kind == GpuKind::Vulkan) {
                 return d.clone();
             }
-            if let Some(d) = all.iter().find(|d| d.kind == GpuKind::Cuda) {
-                notes.push(
-                    "No Vulkan device; falling back to CUDA (use Vulkan-built GGML for this stack)"
-                        .into(),
-                );
+            if let Some(d) = all.iter().find(|d| d.kind == GpuKind::Sycl) {
                 return d.clone();
             }
-            return cpu_device();
+            cpu_device()
         }
-        GpuPreference::Vulkan => GpuKind::Vulkan,
-        GpuPreference::Cuda => GpuKind::Cuda,
-        GpuPreference::Cpu => return cpu_device(),
-    };
-
-    if let Some(d) = all.iter().find(|d| d.kind == want) {
-        return d.clone();
+        GpuPreference::Vulkan => {
+            if let Some(d) = all.iter().find(|d| d.kind == GpuKind::Vulkan) {
+                if has_intel_gpu {
+                    notes.push(
+                        "Forced Vulkan on Intel GPU — Qwen3-TTS may produce bad audio".into(),
+                    );
+                }
+                return d.clone();
+            }
+            notes.push("Requested Vulkan not found — falling back to CPU".into());
+            cpu_device()
+        }
+        GpuPreference::Cuda => {
+            if let Some(d) = all.iter().find(|d| d.kind == GpuKind::Cuda) {
+                return d.clone();
+            }
+            notes.push("Requested CUDA not found — falling back to CPU".into());
+            cpu_device()
+        }
+        GpuPreference::Sycl => {
+            if let Some(d) = all.iter().find(|d| d.kind == GpuKind::Sycl) {
+                return d.clone();
+            }
+            if sycl_runtime {
+                notes.push("Forced SYCL: runtime present, no device enum — using SYCL0".into());
+                return sycl_device(0, "SYCL0 (forced)");
+            }
+            // Fallback chain: SYCL → Vulkan (non-ideal) → CPU
+            notes.push("Requested SYCL not available — trying Vulkan, then CPU".into());
+            if let Some(d) = all.iter().find(|d| d.kind == GpuKind::Vulkan) {
+                notes.push("SYCL→Vulkan fallback (experimental on Intel)".into());
+                return d.clone();
+            }
+            notes.push("SYCL and Vulkan unavailable — CPU".into());
+            cpu_device()
+        }
+        GpuPreference::Cpu => cpu_device(),
     }
+}
 
-    notes.push(format!(
-        "Requested GPU {:?} not found — falling back to CPU",
-        want
-    ));
-    cpu_device()
+fn env_truthy(key: &str) -> bool {
+    std::env::var(key)
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
 }
 
 fn cpu_device() -> GpuDevice {
@@ -225,6 +375,158 @@ fn cpu_device() -> GpuDevice {
     }
 }
 
+fn sycl_device(index: u32, name: &str) -> GpuDevice {
+    GpuDevice {
+        index,
+        name: name.into(),
+        kind: GpuKind::Sycl,
+        ggml_backend: format!("SYCL{index}"),
+        vendor_hint: Some("intel".into()),
+    }
+}
+
+/// True when a usable **oneAPI/SYCL developer or runtime stack** is present.
+///
+/// Level Zero alone (`ze_loader.dll`) is **not** enough: that ships with the
+/// Intel GPU driver but does not provide DPC++/SYCL runtimes or `sycl-ls`.
+/// Prefer SYCL only when oneAPI is installed / env is set / `sycl-ls` works.
+/// Force with `S2S_SYCL_FORCE=1` after deploying a SYCL-built binary + runtime.
+pub fn sycl_runtime_available() -> bool {
+    if env_truthy("S2S_SYCL_FORCE") {
+        return true;
+    }
+
+    // sycl-ls from oneAPI (strongest signal)
+    if Command::new("sycl-ls")
+        .output()
+        .map(|o| o.status.success() || !o.stdout.is_empty())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    // Compilers imply toolkit installed
+    if which_ok("icx") || which_ok("icpx") || which_ok("dpcpp") {
+        return true;
+    }
+
+    // Custom path from our installer / user env
+    if let Ok(p) = std::env::var("S2S_ONEAPI_ROOT") {
+        if Path::new(&p).is_dir() {
+            return true;
+        }
+    }
+
+    // oneAPI install roots (Windows + Linux; D: custom install supported)
+    let roots = [
+        r"D:\Intel\oneAPI",
+        r"E:\Intel\oneAPI",
+        r"C:\Program Files (x86)\Intel\oneAPI",
+        r"C:\Program Files\Intel\oneAPI",
+        "/opt/intel/oneapi",
+    ];
+    for r in roots {
+        if Path::new(r).is_dir() {
+            return true;
+        }
+    }
+
+    // Env from setvars.sh / setvars.bat
+    if std::env::var_os("ONEAPI_ROOT").is_some()
+        || std::env::var_os("CMPLR_ROOT").is_some()
+        || std::env::var_os("SETVARS_COMPLETED").is_some()
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Driver-level Level Zero (Arc can run L0 without full oneAPI toolkit).
+pub fn level_zero_present() -> bool {
+    Path::new(r"C:\Windows\System32\ze_loader.dll").exists()
+        || Path::new("/usr/lib/x86_64-linux-gnu/libze_loader.so").exists()
+        || Path::new("/usr/lib/libze_loader.so.1").exists()
+        || Path::new("/usr/local/lib/libze_loader.so").exists()
+        || std::env::var_os("ZE_ENABLE_ALT_DRIVERS").is_some()
+}
+
+fn which_ok(bin: &str) -> bool {
+    Command::new(bin)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn detect_sycl(runtime_ok: bool, notes: &mut Vec<String>) -> Vec<GpuDevice> {
+    let mut devices = Vec::new();
+    if !runtime_ok {
+        return devices;
+    }
+
+    // Prefer sycl-ls output for real device list
+    if let Some(list) = parse_sycl_ls() {
+        return list;
+    }
+
+    // Infer from Vulkan/Intel presence: one Level-Zero GPU is typical on Arc
+    notes.push(
+        "SYCL runtime present but sycl-ls unavailable — advertising SYCL0 for Intel GPU".into(),
+    );
+    devices.push(sycl_device(0, "Intel GPU (Level Zero / oneAPI)"));
+    devices
+}
+
+fn parse_sycl_ls() -> Option<Vec<GpuDevice>> {
+    let output = Command::new("sycl-ls").output().ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    let mut devices = Vec::new();
+    let mut idx = 0u32;
+    for line in text.lines() {
+        let line = line.trim();
+        // Examples:
+        // [level_zero:gpu][level_zero:0] Intel(R) Arc(TM) B580 Graphics
+        // [opencl:cpu] ...
+        let lower = line.to_ascii_lowercase();
+        if !(lower.contains("gpu") || lower.contains("level_zero") || lower.contains("opencl:gpu"))
+        {
+            continue;
+        }
+        if lower.contains("cpu") && !lower.contains("gpu") {
+            continue;
+        }
+        let name = line.to_string();
+        let vendor = if lower.contains("intel") || lower.contains("arc") {
+            Some("intel".into())
+        } else if lower.contains("nvidia") {
+            Some("nvidia".into())
+        } else if lower.contains("amd") {
+            Some("amd".into())
+        } else {
+            None
+        };
+        devices.push(GpuDevice {
+            index: idx,
+            name,
+            kind: GpuKind::Sycl,
+            ggml_backend: format!("SYCL{idx}"),
+            vendor_hint: vendor,
+        });
+        idx += 1;
+    }
+
+    if devices.is_empty() {
+        None
+    } else {
+        Some(devices)
+    }
+}
+
 pub fn running_in_container() -> bool {
     if Path::new("/.dockerenv").exists() {
         return true;
@@ -232,7 +534,6 @@ pub fn running_in_container() -> bool {
     if std::env::var_os("S2S_DOCKER").is_some() {
         return true;
     }
-    // cgroup v1/v2 hints
     if let Ok(data) = std::fs::read_to_string("/proc/1/cgroup") {
         if data.contains("docker") || data.contains("kubepods") || data.contains("containerd") {
             return true;
@@ -262,11 +563,10 @@ fn list_dri_nodes() -> Vec<String> {
 fn detect_nvidia() -> Vec<GpuDevice> {
     let mut devices = Vec::new();
 
-    // Container / toolkit env often set even without nvidia-smi on PATH of app image.
-    let has_nvidia_env = std::env::var_os("NVIDIA_VISIBLE_DEVICES").is_some()
-        || std::env::var_os("NVIDIA_DRIVER_CAPABILITIES").is_some()
-        || Path::new("/dev/nvidia0").exists()
-        || Path::new("/dev/nvidiactl").exists();
+    // NVIDIA environment variables alone are not proof of a usable GPU:
+    // Dockerfiles commonly set them even without an NVIDIA runtime/device.
+    let has_nvidia_device =
+        Path::new("/dev/nvidia0").exists() || Path::new("/dev/nvidiactl").exists();
 
     if let Some(list) = run_nvidia_smi() {
         for (i, name) in list.into_iter().enumerate() {
@@ -281,10 +581,10 @@ fn detect_nvidia() -> Vec<GpuDevice> {
         return devices;
     }
 
-    if has_nvidia_env {
+    if has_nvidia_device {
         devices.push(GpuDevice {
             index: 0,
-            name: "NVIDIA GPU (device node / container env)".into(),
+            name: "NVIDIA GPU (device node)".into(),
             kind: GpuKind::Cuda,
             ggml_backend: "CUDA0".into(),
             vendor_hint: Some("nvidia".into()),
@@ -319,16 +619,15 @@ fn run_nvidia_smi() -> Option<Vec<String>> {
 fn detect_vulkan(notes: &mut Vec<String>) -> Vec<GpuDevice> {
     let mut devices = Vec::new();
 
-    // 1) vulkaninfo --summary (most reliable when tools installed)
     if let Some(list) = parse_vulkaninfo() {
         return list;
     }
 
-    // 2) ICD files present?
     let icd_dirs = [
         "/usr/share/vulkan/icd.d",
         "/etc/vulkan/icd.d",
         "/usr/local/share/vulkan/icd.d",
+        r"C:\Windows\System32\DriverStore\FileRepository",
     ];
     let mut icds = Vec::new();
     for dir in icd_dirs {
@@ -336,16 +635,15 @@ fn detect_vulkan(notes: &mut Vec<String>) -> Vec<GpuDevice> {
         if let Ok(rd) = std::fs::read_dir(p) {
             for e in rd.flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
-                if name.ends_with(".json") {
+                if name.ends_with(".json") || name.to_ascii_lowercase().contains("intel") {
                     icds.push(format!("{dir}/{name}"));
                 }
             }
         }
     }
 
-    // Also honor VK_ICD_FILENAMES
     if let Ok(paths) = std::env::var("VK_ICD_FILENAMES") {
-        for p in paths.split(':') {
+        for p in paths.split([';', ':']) {
             if !p.is_empty() {
                 icds.push(p.to_string());
             }
@@ -354,6 +652,24 @@ fn detect_vulkan(notes: &mut Vec<String>) -> Vec<GpuDevice> {
 
     let dri = list_dri_nodes();
     let has_render = dri.iter().any(|d| d.contains("renderD"));
+
+    // Windows: Vulkan SDK / ICD often without vulkaninfo on PATH in some shells
+    #[cfg(windows)]
+    {
+        let vk_sdk = std::env::var_os("VULKAN_SDK");
+        let has_sdk = vk_sdk.is_some() || Path::new(r"C:\VulkanSDK").is_dir();
+        if devices.is_empty() && (has_sdk || !icds.is_empty()) {
+            // Probe common Intel name via DXGI is heavy; use generic entry
+            devices.push(GpuDevice {
+                index: 0,
+                name: "Vulkan GPU (Windows ICD/SDK)".into(),
+                kind: GpuKind::Vulkan,
+                ggml_backend: "Vulkan0".into(),
+                vendor_hint: None,
+            });
+            return devices;
+        }
+    }
 
     if !icds.is_empty() || has_render {
         let vendor = infer_vendor_from_icds(&icds);
@@ -384,26 +700,44 @@ fn detect_vulkan(notes: &mut Vec<String>) -> Vec<GpuDevice> {
 }
 
 fn parse_vulkaninfo() -> Option<Vec<GpuDevice>> {
-    let output = Command::new("vulkaninfo")
-        .args(["--summary"])
-        .output()
-        .ok()?;
-    // vulkaninfo may return non-zero when incomplete; still parse stdout.
+    let mut cmd = Command::new("vulkaninfo");
+    cmd.args(["--summary"]);
+    // Windows SDK path
+    #[cfg(windows)]
+    {
+        if let Ok(sdk) = std::env::var("VULKAN_SDK") {
+            let exe = Path::new(&sdk).join("Bin").join("vulkaninfo.exe");
+            if exe.is_file() {
+                return parse_vulkaninfo_from(Command::new(exe).args(["--summary"]));
+            }
+        }
+        let sdk_root = Path::new(r"C:\VulkanSDK");
+        if sdk_root.is_dir() {
+            if let Ok(rd) = std::fs::read_dir(sdk_root) {
+                for e in rd.flatten() {
+                    let exe = e.path().join("Bin").join("vulkaninfo.exe");
+                    if exe.is_file() {
+                        return parse_vulkaninfo_from(Command::new(exe).args(["--summary"]));
+                    }
+                }
+            }
+        }
+    }
+    parse_vulkaninfo_from(&mut cmd)
+}
+
+fn parse_vulkaninfo_from(cmd: &mut Command) -> Option<Vec<GpuDevice>> {
+    let output = cmd.output().ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
     if text.trim().is_empty() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        if err.trim().is_empty() {
-            return None;
-        }
+        return None;
     }
 
     let mut raw_names: Vec<String> = Vec::new();
 
-    // Prefer "GPU0 = …" summary lines; fall back to deviceName.
     for line in text.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("GPU") {
-            // GPU0 = Name  (first char of rest should be a digit)
             if rest.chars().next().is_some_and(|c| c.is_ascii_digit()) {
                 if let Some((_, n)) = rest.split_once('=') {
                     let n = n.trim();
@@ -429,7 +763,6 @@ fn parse_vulkaninfo() -> Option<Vec<GpuDevice>> {
         }
     }
 
-    // Dedup while preserving order.
     let mut seen = std::collections::HashSet::new();
     raw_names.retain(|n| seen.insert(n.clone()));
 
@@ -474,9 +807,10 @@ fn parse_vulkaninfo() -> Option<Vec<GpuDevice>> {
         None
     } else {
         devices.sort_by_key(|d| match d.kind {
-            GpuKind::Vulkan => 0,
-            GpuKind::Cuda => 1,
-            GpuKind::Cpu => 2,
+            GpuKind::Sycl => 0,
+            GpuKind::Vulkan => 1,
+            GpuKind::Cuda => 2,
+            GpuKind::Cpu => 3,
         });
         for (i, d) in devices.iter_mut().enumerate() {
             d.index = i as u32;
@@ -503,4 +837,20 @@ fn infer_vendor_from_icds(icds: &[String]) -> Option<String> {
 /// JSON for `--list-gpus` and container health endpoints.
 pub fn report_json(report: &GpuReport) -> String {
     serde_json::to_string_pretty(report).unwrap_or_else(|_| "{}".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cpu_device_backend() {
+        assert_eq!(cpu_device().ggml_backend, "CPU");
+    }
+
+    #[test]
+    fn sycl_device_backend() {
+        assert_eq!(sycl_device(0, "x").ggml_backend, "SYCL0");
+        assert_eq!(sycl_device(1, "x").ggml_backend, "SYCL1");
+    }
 }

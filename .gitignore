@@ -25,3 +25,7 @@
 Thumbs.db
 .idea/
 .vscode/
+
+s2s-vulkan/logs/
+s2s-vulkan/third_party/
+

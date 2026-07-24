@@ -29,7 +29,10 @@ pub async fn run_realtime_server(cfg: Config) -> Result<()> {
 
     let app = Router::new()
         .route("/v1/realtime", get(ws_upgrade))
-        .route("/", get(|| async { "s2s-vulkan realtime — connect to /v1/realtime" }))
+        .route(
+            "/",
+            get(|| async { "s2s-vulkan realtime — connect to /v1/realtime" }),
+        )
         .layer(CorsLayer::permissive())
         .with_state(cfg.clone());
 
@@ -67,6 +70,36 @@ async fn handle_realtime(socket: WebSocket, cfg: Arc<Config>) {
         }),
     )
     .await;
+
+    // Drain pipeline UI events so STT/LLM handlers never block on a full channel.
+    let mut event_rx = handles.event_rx;
+    let event_sink = sink.clone();
+    let event_task = tokio::spawn(async move {
+        while let Some(ev) = event_rx.recv().await {
+            // Surface transcripts as conversation items for debugging clients.
+            if let crate::messages::PipelineEvent::FinalTranscript { text, .. } = &ev {
+                send_json(
+                    &event_sink,
+                    json!({
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "event_id": event_id(),
+                        "transcript": text,
+                    }),
+                )
+                .await;
+            } else if let crate::messages::PipelineEvent::LlmFull { text, .. } = &ev {
+                send_json(
+                    &event_sink,
+                    json!({
+                        "type": "response.output_text.done",
+                        "event_id": event_id(),
+                        "text": text,
+                    }),
+                )
+                .await;
+            }
+        }
+    });
 
     let out_sink = sink.clone();
     let play_task = tokio::spawn(async move {
@@ -149,10 +182,7 @@ async fn handle_realtime(socket: WebSocket, cfg: Arc<Config>) {
                         if let Some(b64) = v.get("audio").and_then(|a| a.as_str()) {
                             if let Ok(bytes) = B64.decode(b64) {
                                 // Accept either raw pcm or mislabeled — assume s16le.
-                                let _ = handles
-                                    .audio_in_tx
-                                    .send(QueueItem::Data(bytes))
-                                    .await;
+                                let _ = handles.audio_in_tx.send(QueueItem::Data(bytes)).await;
                             }
                         }
                     }
@@ -170,7 +200,10 @@ async fn handle_realtime(socket: WebSocket, cfg: Arc<Config>) {
                         if let Some(text) = v
                             .pointer("/item/content/0/text")
                             .and_then(|x| x.as_str())
-                            .or_else(|| v.pointer("/item/content/0/transcript").and_then(|x| x.as_str()))
+                            .or_else(|| {
+                                v.pointer("/item/content/0/transcript")
+                                    .and_then(|x| x.as_str())
+                            })
                         {
                             // Inject synthetic silence-free path: encode short dummy? Better:
                             // send as if STT already ran — we don't have a direct STT inject
@@ -182,7 +215,10 @@ async fn handle_realtime(socket: WebSocket, cfg: Arc<Config>) {
                 }
             }
             Ok(Message::Binary(data)) => {
-                let _ = handles.audio_in_tx.send(QueueItem::Data(data.to_vec())).await;
+                let _ = handles
+                    .audio_in_tx
+                    .send(QueueItem::Data(data.to_vec()))
+                    .await;
             }
             Ok(Message::Close(_)) => break,
             Ok(_) => {}
@@ -193,8 +229,12 @@ async fn handle_realtime(socket: WebSocket, cfg: Arc<Config>) {
         }
     }
 
-    let _ = handles.audio_in_tx.send(QueueItem::Control(Control::PipelineEnd)).await;
+    let _ = handles
+        .audio_in_tx
+        .send(QueueItem::Control(Control::PipelineEnd))
+        .await;
     play_task.abort();
+    event_task.abort();
     info!("Realtime client disconnected");
 }
 

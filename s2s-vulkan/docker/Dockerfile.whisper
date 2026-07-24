@@ -1,0 +1,53 @@
+# faster-whisper STT server — better quality than raw whisper.cpp on short clips.
+# Compatible with s2s-vulkan POST /inference (JSON {text}).
+FROM python:3.12-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir \
+        faster-whisper==1.2.1 \
+        aiohttp==3.14.3 \
+        numpy==2.5.1 \
+        soundfile==0.14.0
+
+# Tiny is the zero-download startup ASR. Keep it outside /models because the
+# latter is a user-managed volume for optional models.
+RUN python - <<'PY'
+from hashlib import sha256
+from pathlib import Path
+from huggingface_hub import snapshot_download
+
+target = Path("/opt/s2s-models/faster-whisper-tiny")
+snapshot_download(
+    repo_id="Systran/faster-whisper-tiny",
+    revision="d90ca5fe260221311c53c58e660288d3deb8d356",
+    local_dir=target,
+    allow_patterns=["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
+)
+expected = {
+    "config.json": 2249,
+    "model.bin": 75538270,
+    "tokenizer.json": 2203239,
+    "vocabulary.txt": 459861,
+}
+for name, size in expected.items():
+    actual = (target / name).stat().st_size
+    if actual != size:
+        raise SystemExit(f"{name}: expected {size} bytes, got {actual}")
+digest = sha256((target / "model.bin").read_bytes()).hexdigest()
+if digest != "dcb76c6586fc06cbdac6dd21f14cfd129cc4cdd9dce19bf4ffa62e59cbe6e6d1":
+    raise SystemExit(f"tiny model SHA-256 mismatch: {digest}")
+PY
+
+WORKDIR /app
+COPY scripts/whisper_stt_server.py /app/whisper_stt_server.py
+
+ENV S2S_WHISPER_MODEL=/opt/s2s-models/faster-whisper-tiny \
+    S2S_WHISPER_DEVICE=cpu \
+    S2S_WHISPER_COMPUTE=int8 \
+    HF_HOME=/models/hf-cache
+
+EXPOSE 8082
+# Model name via env; language forced from compose when needed.
+CMD ["python", "-u", "/app/whisper_stt_server.py", "--host", "0.0.0.0", "--port", "8082"]

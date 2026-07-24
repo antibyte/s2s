@@ -1,0 +1,238 @@
+diff --git a/include/ggml-sycl.h b/include/ggml-sycl.h
+index 418a7ba9..4f164456 100644
+--- a/include/ggml-sycl.h
++++ b/include/ggml-sycl.h
+@@ -21,6 +21,23 @@ GGML_BACKEND_API ggml_backend_t ggml_backend_sycl_init(int device);
+ 
+ GGML_BACKEND_API bool ggml_backend_is_sycl(ggml_backend_t backend);
+ 
++// Qwen CodePredictor helper: sample one contiguous F32 logits row on
++// the active SYCL queue. top_k must be 1..256. The selected token is
++// written into the optional next graph input and a device token array.
++GGML_BACKEND_API bool ggml_backend_sycl_sample_top_k_p(
++        ggml_backend_t backend,
++        const struct ggml_tensor * logits,
++        float temperature,
++        int top_k,
++        float top_p,
++        int64_t seed,
++        int64_t subsequence,
++        struct ggml_tensor * next_token,
++        struct ggml_tensor * sampled_tokens,
++        int logits_row,
++        int next_token_index,
++        int sampled_index);
++
+ // devide buffer
+ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(int device);
+ 
+diff --git a/src/ggml-sycl/fattn-onednn.cpp b/src/ggml-sycl/fattn-onednn.cpp
+index f2e12ef1..1454dbb5 100644
+--- a/src/ggml-sycl/fattn-onednn.cpp
++++ b/src/ggml-sycl/fattn-onednn.cpp
+@@ -24,7 +24,11 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
+     // https://github.com/uxlfoundation/oneDNN/issues/5510. Remove this hardware limitation once that
+     // is fixed; until then non-BMG archs fall back to the existing FA kernel.
+     const gpu_arch arch = ggml_sycl_info().devices[ggml_sycl_get_device()].hw_info.arch;
+-    if (arch != gpu_arch::intel_gpu_bmg_g21 && arch != gpu_arch::intel_gpu_bmg_g31) {
++    bool is_bmg = arch == gpu_arch::intel_gpu_bmg_g21;
++#if !defined(__INTEL_LLVM_COMPILER) || __INTEL_LLVM_COMPILER >= 20260000
++    is_bmg = is_bmg || arch == gpu_arch::intel_gpu_bmg_g31;
++#endif
++    if (!is_bmg) {
+         return false;
+     }
+     const ggml_tensor * Q     = dst->src[0];
+diff --git a/src/ggml-sycl/fattn-vec.hpp b/src/ggml-sycl/fattn-vec.hpp
+index 04baac44..90e9857d 100644
+--- a/src/ggml-sycl/fattn-vec.hpp
++++ b/src/ggml-sycl/fattn-vec.hpp
+@@ -17,9 +17,11 @@ namespace syclex = sycl::ext::oneapi::experimental;
+ 
+ static int ggml_sycl_fattn_vec_get_nthreads_device(gpu_arch arch) {
+     // Xe2 (Battlemage, Lunar Lake) runs the flash-attention vec kernel best with a 256-thread work group.
+-    return (arch == gpu_arch::intel_gpu_bmg_g21 ||
+-            arch == gpu_arch::intel_gpu_bmg_g31 ||
+-            arch == gpu_arch::intel_gpu_lnl_m) ? 256 : 128;
++    bool xe2 = arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_lnl_m;
++#if !defined(__INTEL_LLVM_COMPILER) || __INTEL_LLVM_COMPILER >= 20260000
++    xe2 = xe2 || arch == gpu_arch::intel_gpu_bmg_g31;
++#endif
++    return xe2 ? 256 : 128;
+ }
+ 
+ // Currenlty llvm with the amdgcn target dose not support unrolling loops
+diff --git a/src/ggml-sycl/ggml-sycl.cpp b/src/ggml-sycl/ggml-sycl.cpp
+index cb8974ee..2e36e637 100644
+--- a/src/ggml-sycl/ggml-sycl.cpp
++++ b/src/ggml-sycl/ggml-sycl.cpp
+@@ -5558,6 +5558,149 @@ bool ggml_backend_is_sycl(ggml_backend_t backend) {
+     return backend != NULL && ggml_guid_matches(backend->guid, ggml_backend_sycl_guid());
+ }
+ 
++bool ggml_backend_sycl_sample_top_k_p(
++        ggml_backend_t backend,
++        const struct ggml_tensor * logits,
++        float temperature,
++        int top_k,
++        float top_p,
++        int64_t seed,
++        int64_t subsequence,
++        struct ggml_tensor * next_token,
++        struct ggml_tensor * sampled_tokens,
++        int logits_row,
++        int next_token_index,
++        int sampled_index) try {
++    if (!ggml_backend_is_sycl(backend) || logits == nullptr || sampled_tokens == nullptr ||
++        logits->type != GGML_TYPE_F32 || !ggml_is_contiguous(logits) ||
++        logits_row < 0 || logits_row >= ggml_nrows(logits) ||
++        sampled_tokens->type != GGML_TYPE_I32 || sampled_index < 0 ||
++        sampled_index >= ggml_nelements(sampled_tokens) ||
++        (next_token != nullptr &&
++         (next_token->type != GGML_TYPE_I32 || next_token_index < 0 ||
++          next_token_index >= ggml_nelements(next_token))) ||
++        top_k < 1 || top_k > 256) {
++        return false;
++    }
++    const int n_vocab = (int) logits->ne[0];
++    if (n_vocab < 1) {
++        return false;
++    }
++    const int k = std::min(top_k, n_vocab);
++    auto * ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
++    queue_ptr queue = ctx->stream();
++    ggml_sycl_set_device(ctx->device);
++
++    const float * values = static_cast<const float *>(logits->data) + (size_t) logits_row * (size_t) n_vocab;
++    int32_t * next_value =
++        next_token ? static_cast<int32_t *>(next_token->data) + next_token_index : nullptr;
++    int32_t * code_value = static_cast<int32_t *>(sampled_tokens->data) + sampled_index;
++    queue->single_task([=]() {
++        float   selected_values[256];
++        int32_t selected_ids[256];
++        for (int i = 0; i < k; ++i) {
++            selected_values[i] = -INFINITY;
++            selected_ids[i] = -1;
++        }
++
++        const float inv_temperature = temperature > 0.0f ? 1.0f / temperature : 1.0f;
++        for (int token = 0; token < n_vocab; ++token) {
++            const float value = values[token] * inv_temperature;
++            int insert = k;
++            for (int i = 0; i < k; ++i) {
++                if (value > selected_values[i]) {
++                    insert = i;
++                    break;
++                }
++            }
++            if (insert < k) {
++                for (int i = k - 1; i > insert; --i) {
++                    selected_values[i] = selected_values[i - 1];
++                    selected_ids[i] = selected_ids[i - 1];
++                }
++                selected_values[insert] = value;
++                selected_ids[insert] = token;
++            }
++        }
++
++        if (temperature <= 0.0f) {
++            *code_value = selected_ids[0];
++            if (next_value) {
++                *next_value = selected_ids[0];
++            }
++            return;
++        }
++
++        const float max_value = selected_values[0];
++        float probabilities[256];
++        float sum = 0.0f;
++        for (int i = 0; i < k; ++i) {
++            probabilities[i] = sycl::exp(selected_values[i] - max_value);
++            sum += probabilities[i];
++        }
++
++        int keep = k;
++        if (top_p > 0.0f && top_p < 1.0f && sum > 0.0f) {
++            float cumulative = 0.0f;
++            keep = 0;
++            while (keep < k) {
++                cumulative += probabilities[keep] / sum;
++                ++keep;
++                if (cumulative >= top_p) {
++                    break;
++                }
++            }
++            sum = 0.0f;
++            for (int i = 0; i < keep; ++i) {
++                sum += probabilities[i];
++            }
++        }
++
++        uint32_t x = 0u;
++        uint32_t y = 0u;
++        uint32_t z = (uint32_t) (uint64_t) subsequence;
++        uint32_t w = (uint32_t) ((uint64_t) subsequence >> 32);
++        uint32_t key0 = (uint32_t) (uint64_t) seed;
++        uint32_t key1 = (uint32_t) ((uint64_t) seed >> 32);
++        for (int round = 0; round < 10; ++round) {
++            const uint64_t product0 = (uint64_t) 0xD2511F53u * (uint64_t) x;
++            const uint64_t product1 = (uint64_t) 0xCD9E8D57u * (uint64_t) z;
++            const uint32_t next_x = (uint32_t) (product1 >> 32) ^ y ^ key0;
++            const uint32_t next_y = (uint32_t) product1;
++            const uint32_t next_z = (uint32_t) (product0 >> 32) ^ w ^ key1;
++            const uint32_t next_w = (uint32_t) product0;
++            x = next_x;
++            y = next_y;
++            z = next_z;
++            w = next_w;
++            key0 += 0x9E3779B9u;
++            key1 += 0xBB67AE85u;
++        }
++        const float uniform = ((float) x + 0.5f) * 2.3283064365386963e-10f;
++        const float draw = uniform * sum;
++        float cumulative = 0.0f;
++        for (int i = 0; i < keep; ++i) {
++            cumulative += probabilities[i];
++            if (cumulative >= draw) {
++                *code_value = selected_ids[i];
++                if (next_value) {
++                    *next_value = selected_ids[i];
++                }
++                return;
++            }
++        }
++        *code_value = selected_ids[keep - 1];
++        if (next_value) {
++            *next_value = selected_ids[keep - 1];
++        }
++    });
++    return true;
++}
++catch (const sycl::exception & exc) {
++    GGML_LOG_ERROR("%s: SYCL sampler failed: %s\n", __func__, exc.what());
++    return false;
++}
++
+ int ggml_backend_sycl_get_device_count() {
+     return ggml_sycl_info().device_count;
+ }
+diff --git a/src/ggml-sycl/sycl_hw.cpp b/src/ggml-sycl/sycl_hw.cpp
+index 03b0c37a..7f79bd82 100644
+--- a/src/ggml-sycl/sycl_hw.cpp
++++ b/src/ggml-sycl/sycl_hw.cpp
+@@ -32,11 +32,15 @@ static map<gpu_arch, std::pair<const char*, sycl_intel_gpu_family>> arch2name =
+     {gpu_arch::intel_gpu_mtl_h,   {"intel_gpu_mtl_h",   GPU_FAMILY_IGPU_XE}},
+     {gpu_arch::intel_gpu_arl_h,   {"intel_gpu_arl_h",   GPU_FAMILY_IGPU_XE}},
+     {gpu_arch::intel_gpu_bmg_g21, {"intel_gpu_bmg_g21", GPU_FAMILY_DGPU_CLIENT_GAME}},
++#if !defined(__INTEL_LLVM_COMPILER) || __INTEL_LLVM_COMPILER >= 20260000
+     {gpu_arch::intel_gpu_bmg_g31, {"intel_gpu_bmg_g31", GPU_FAMILY_DGPU_CLIENT_GAME}},
++#endif
+     {gpu_arch::intel_gpu_lnl_m,   {"intel_gpu_lnl_m",   GPU_FAMILY_IGPU_XE}},
+     {gpu_arch::intel_gpu_ptl_h,   {"intel_gpu_ptl_h",   GPU_FAMILY_IGPU_XE}},
+     {gpu_arch::intel_gpu_ptl_u,   {"intel_gpu_ptl_u",   GPU_FAMILY_IGPU_XE}},
++#if !defined(__INTEL_LLVM_COMPILER) || __INTEL_LLVM_COMPILER >= 20260000
+     {gpu_arch::intel_gpu_wcl,     {"intel_gpu_wcl",     GPU_FAMILY_IGPU_XE}}
++#endif
+ };
+ 
+ 
