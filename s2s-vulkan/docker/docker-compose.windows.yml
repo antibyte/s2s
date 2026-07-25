@@ -1,19 +1,72 @@
-# Windows Docker Desktop: drop /dev/dri and force CPU backends.
+# Windows Docker Desktop keeps the orchestrator/UI in containers. Intel Arc
+# Vulkan inference is started natively by scripts/host_idle_agent.ps1.
 #
 #   docker compose -f docker-compose.yml -f docker/docker-compose.windows.yml \
 #     --profile backends --profile web up -d --build
 
 services:
+  model-init:
+    volumes:
+      - "${S2S_MODELS_HOST_DIR:-./models}:/models"
+
   s2s:
     environment:
       S2S_GPU: cpu
       GGML_BACKEND: CPU
+      S2S_DATA_DIR: /data
+      S2S_LAB_PLATFORM: windows
+      S2S_LAB_GPU_VENDOR: ${S2S_LAB_GPU_VENDOR:-intel}
+      S2S_LAB_DEVICE_NAME: ${S2S_LAB_DEVICE_NAME:-Intel Arc B580}
+      S2S_LAB_ACCELERATORS: ${S2S_LAB_ACCELERATORS:-vulkan,cpu}
+      S2S_ALLOW_EXPERIMENTAL: ${S2S_ALLOW_EXPERIMENTAL:-false}
+    volumes:
+      - "${S2S_MODELS_HOST_DIR:-./models}:/models"
+      - "${S2S_DATA_HOST_DIR:-./data}:/data"
+      - ./config/backends.json:/app/config/backends.json:ro
     # Compose merge cannot remove devices cleanly on all versions — redefine service
     # without host GPU nodes by clearing via empty deploy (devices still merge).
     # Workaround: use entrypoint that ignores missing DRI (already does).
     # If `devices: /dev/dri` fails on Windows, comment devices in docker-compose.yml
     # or run this stack only on Linux/WSL2 with GPU.
 
+  whisper:
+    volumes:
+      - "${S2S_MODELS_HOST_DIR:-./models}:/models"
+
+  whisper-tiny:
+    profiles: ["backends", "managed"]
+    volumes:
+      - "${S2S_MODELS_HOST_DIR:-./models}:/models"
+
+  whisper-small:
+    volumes:
+      - "${S2S_MODELS_HOST_DIR:-./models}:/models"
+
+  parakeet-cpu:
+    volumes:
+      - "${S2S_MODELS_HOST_DIR:-./models}:/models"
+
+  voxtral-cpu:
+    volumes:
+      - "${S2S_MODELS_HOST_DIR:-./models}:/models"
+
   llama:
+    profiles: ["backends", "fallback", "managed", "full"]
     environment:
       GGML_BACKEND: CPU
+
+  tts:
+    volumes:
+      - "${S2S_MODELS_HOST_DIR:-./models}:/models"
+
+  kokoro:
+    volumes:
+      - "${S2S_MODELS_HOST_DIR:-./models}:/models"
+
+  vibevoice:
+    volumes:
+      - "${S2S_MODELS_HOST_DIR:-./models}:/models"
+
+  higgs:
+    volumes:
+      - "${S2S_MODELS_HOST_DIR:-./models}:/models"

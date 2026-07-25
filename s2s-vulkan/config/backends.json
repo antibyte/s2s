@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "backends": [
     {
       "id": "fw-tiny",
@@ -66,6 +66,39 @@
             "S2S_WHISPER_MODEL": "/opt/s2s-models/faster-whisper-tiny",
             "S2S_WHISPER_DEVICE": "cpu"
           }
+        },
+        {
+          "id": "fw-tiny-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin?download=true",
+              "path": "whisper/ggml-tiny.bin",
+              "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+              "size": 77691713
+            }
+          ],
+          "bundled": false,
+          "protocol": "whisper-cpp",
+          "host_profile": "crispasr-whisper"
         }
       ]
     },
@@ -157,6 +190,39 @@
             "S2S_WHISPER_MODEL": "/models/faster-whisper/base",
             "S2S_WHISPER_DEVICE": "cpu"
           }
+        },
+        {
+          "id": "fw-base-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin?download=true",
+              "path": "whisper/ggml-base.bin",
+              "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+              "size": 147951465
+            }
+          ],
+          "bundled": false,
+          "protocol": "whisper-cpp",
+          "host_profile": "crispasr-whisper"
         }
       ]
     },
@@ -248,6 +314,39 @@
             "S2S_WHISPER_MODEL": "/models/faster-whisper/small",
             "S2S_WHISPER_DEVICE": "cpu"
           }
+        },
+        {
+          "id": "fw-small-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.bin?download=true",
+              "path": "whisper/ggml-small.bin",
+              "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+              "size": 487601967
+            }
+          ],
+          "bundled": false,
+          "protocol": "whisper-cpp",
+          "host_profile": "crispasr-whisper"
         }
       ]
     },
@@ -400,6 +499,38 @@
             "PARAKEET_DEVICE": "cpu",
             "PARAKEET_DTYPE": "float32"
           }
+        },
+        {
+          "id": "parakeet-tdt-0.6b-v3-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/parakeet-tdt-0.6b-v3-GGUF/resolve/dcaae0fab9031b9fb543bc499cbe38c4ac216234/parakeet-tdt-0.6b-v3-q4_k.gguf?download=true",
+              "path": "parakeet/parakeet-tdt-0.6b-v3-q4_k.gguf",
+              "sha256": "addef407ab841eef45739e78920fd8c00e63f78eaa823c490e600e0ab58080a1",
+              "size": 417894912
+            }
+          ],
+          "bundled": false,
+          "host_profile": "crispasr-parakeet"
         }
       ]
     },
@@ -533,6 +664,38 @@
             "VOXTRAL_DEVICE": "cpu",
             "VOXTRAL_DTYPE": "float32"
           }
+        },
+        {
+          "id": "voxtral-mini-4b-realtime-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8087",
+          "native_endpoint": "http://127.0.0.1:8087",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/voxtral-mini-4b-realtime-GGUF/resolve/38f0e025ff6091079acad38502f376dc03b6818e/voxtral-mini-4b-realtime-q4_k.gguf?download=true",
+              "path": "voxtral/voxtral-mini-4b-realtime-q4_k.gguf",
+              "sha256": "7dda1dba692f18c9d30a6064943b92c562853b399e96320929d2e1399c9d41cc",
+              "size": 2524137216
+            }
+          ],
+          "bundled": false,
+          "host_profile": "crispasr-voxtral"
         }
       ]
     },
@@ -608,6 +771,29 @@
           "environment": {
             "GGML_BACKEND": "CUDA0"
           }
+        },
+        {
+          "id": "wcpp-base-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "host_profile": "crispasr-whisper"
         }
       ]
     },
@@ -657,6 +843,68 @@
           "image": "s2s-vulkan:local",
           "health_path": "/health",
           "environment": {}
+        },
+        {
+          "id": "supertonic-webgpu-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8085/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8085/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/onnx/duration_predictor.onnx?download=true",
+              "path": "supertonic/onnx/duration_predictor.onnx",
+              "sha256": "c3eb91414d5ff8a7a239b7fe9e34e7e2bf8a8140d8375ffb14718b1c639325db",
+              "size": 3700147
+            },
+            {
+              "source": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/onnx/text_encoder.onnx?download=true",
+              "path": "supertonic/onnx/text_encoder.onnx",
+              "sha256": "c7befd5ea8c3119769e8a6c1486c4edc6a3bc8365c67621c881bbb774b9902ff",
+              "size": 36416150
+            },
+            {
+              "source": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/onnx/vector_estimator.onnx?download=true",
+              "path": "supertonic/onnx/vector_estimator.onnx",
+              "sha256": "883ac868ea0275ef0e991524dc64f16b3c0376efd7c320af6b53f5b780d7c61c",
+              "size": 256534781
+            },
+            {
+              "source": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/onnx/vocoder.onnx?download=true",
+              "path": "supertonic/onnx/vocoder.onnx",
+              "sha256": "085de76dd8e8d5836d6ca66826601f615939218f90e519f70ee8a36ed2a4c4ba",
+              "size": 101424195
+            },
+            {
+              "source": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/onnx/unicode_indexer.json?download=true",
+              "path": "supertonic/onnx/unicode_indexer.json",
+              "sha256": "9bf7346e43883a81f8645c81224f786d43c5b57f3641f6e7671a7d6c493cb24f",
+              "size": 277676
+            },
+            {
+              "source": "https://huggingface.co/Supertone/supertonic-3/resolve/3cadd1ee6394adea1bd021217a0e650ede09a323/voice_styles/M1.json?download=true",
+              "path": "supertonic/voice_styles/M1.json",
+              "sha256": "e35604687f5d23694b8e91593a93eec0e4eca6c0b02bb8ed69139ab2ea6b0a5b",
+              "size": 291748
+            }
+          ],
+          "bundled": false,
+          "host_profile": "supertonic-webgpu"
         }
       ]
     },
@@ -827,6 +1075,32 @@
           "environment": {
             "QWEN_CODE_SAMPLER": "host"
           }
+        },
+        {
+          "id": "qwen3-tts-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8083/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8083/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {
+            "GGML_BACKEND": "Vulkan0",
+            "QWEN_CODE_SAMPLER": "host"
+          },
+          "host_profile": "qwen-vulkan"
         }
       ]
     },
@@ -883,6 +1157,44 @@
           "image": "s2s-tts-kokoro:local",
           "health_path": "/health",
           "environment": {}
+        },
+        {
+          "id": "kokoro-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8084/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8084/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/kokoro-82m-GGUF/resolve/f20291b3a27d0900af358ea1c87d63c76183b223/kokoro-82m-q8_0.gguf?download=true",
+              "path": "kokoro-gguf/kokoro-82m-q8_0.gguf",
+              "sha256": "3c8b60064b287a10abd35396a59c9981675c618db8bc91bd290db63f55eb492d",
+              "size": 141322336
+            },
+            {
+              "source": "https://huggingface.co/cstr/kokoro-voices-GGUF/resolve/d6435f2e72f28392c36051c832714815382d36bd/kokoro-voice-df_victoria.gguf?download=true",
+              "path": "kokoro-gguf/kokoro-voice-df_victoria.gguf",
+              "sha256": "61b260c2b78f3326f2de71cb24ff57845f30577ad5095f9ba92e965a49154fa7",
+              "size": 522560
+            }
+          ],
+          "bundled": false,
+          "host_profile": "crispasr-kokoro"
         }
       ]
     },
@@ -1175,6 +1487,44 @@
           "image": "",
           "health_path": "/health",
           "environment": {}
+        },
+        {
+          "id": "vibevoice-realtime-0.5b-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8089/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8089/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/90b9839035fbe4c7e8289f8ce473cb6ffbf78b38/vibevoice-realtime-0.5b-q4_k.gguf?download=true",
+              "path": "vibevoice/vibevoice-realtime-0.5b-q4_k.gguf",
+              "sha256": "483e1922a9077e3fc66b7947a4d6fee3dfd8edc30afde3410efa5bb386bc0392",
+              "size": 698629312
+            },
+            {
+              "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/90b9839035fbe4c7e8289f8ce473cb6ffbf78b38/vibevoice-voice-emma.gguf?download=true",
+              "path": "vibevoice/vibevoice-voice-emma.gguf",
+              "sha256": "4a2e1b0db22e9d1aec0b52b434c108743af629d9def1d7f2d986f55b9f6011e6",
+              "size": 2740832
+            }
+          ],
+          "bundled": false,
+          "host_profile": "crispasr-vibevoice"
         }
       ]
     },
@@ -1394,6 +1744,40 @@
           "environment": {
             "GGML_BACKEND": "CPU"
           }
+        },
+        {
+          "id": "local-fallback-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8081/v1",
+          "native_endpoint": "http://127.0.0.1:8081/v1",
+          "container": "",
+          "image": "",
+          "health_path": "/v1/models",
+          "environment": {
+            "GGML_BACKEND": "Vulkan0"
+          },
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/Edge-Quant/granite-3.3-2b-instruct-Q4_K_M-GGUF/resolve/57f080a9a63847f2dddc227d3514ecfd9257c1c9/granite-3.3-2b-instruct-q4_k_m.gguf?download=true",
+              "path": "granite/granite-3.3-2b-instruct-q4_k_m.gguf",
+              "sha256": "a6cb86162792af1fc7886dc1f31e57a7cf9e0866c660d7c3d44be5173776818d",
+              "size": 1545303328
+            }
+          ],
+          "bundled": false,
+          "host_profile": "llama-granite"
         }
       ]
     }

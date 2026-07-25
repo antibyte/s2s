@@ -5,6 +5,7 @@ mod audio;
 mod benchmark;
 mod config;
 mod gpu;
+mod host_runtime;
 mod io;
 mod lab;
 mod llm;

@@ -42,6 +42,15 @@ pub enum TtsBackend {
     System,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
+pub enum SupertonicProvider {
+    /// ONNX Runtime CPU execution provider.
+    #[default]
+    Cpu,
+    /// ONNX Runtime WebGPU execution provider using Dawn's Vulkan backend.
+    WebgpuVulkan,
+}
+
 /// Preferred accelerator. `auto` probes the host/container and sets `GGML_BACKEND`.
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
 pub enum GpuPreference {
@@ -233,6 +242,15 @@ pub struct Config {
     #[arg(long, default_value_t = 0)]
     pub supertonic_threads: usize,
 
+    /// ONNX execution provider for all four Supertonic sessions.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = SupertonicProvider::Cpu,
+        env = "S2S_SUPERTONIC_PROVIDER"
+    )]
+    pub supertonic_provider: SupertonicProvider,
+
     /// TTS output sample rate after synthesis (Supertonic native 44100; web UI often 16000).
     #[arg(long, default_value_t = 16000)]
     pub tts_sample_rate: u32,
@@ -343,5 +361,21 @@ impl Config {
             "auto" | "" => "auto".into(),
             other => other.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supertonic_provider_defaults_to_cpu_and_accepts_webgpu_vulkan() {
+        let cpu = Config::try_parse_from(["s2s-vulkan"]).unwrap();
+        assert_eq!(cpu.supertonic_provider, SupertonicProvider::Cpu);
+
+        let vulkan =
+            Config::try_parse_from(["s2s-vulkan", "--supertonic-provider", "webgpu-vulkan"])
+                .unwrap();
+        assert_eq!(vulkan.supertonic_provider, SupertonicProvider::WebgpuVulkan);
     }
 }

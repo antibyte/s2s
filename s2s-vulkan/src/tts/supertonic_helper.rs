@@ -4,6 +4,7 @@
 // ============================================================================
 #![allow(dead_code, unused_imports, clippy::all)]
 
+use crate::config::SupertonicProvider;
 use anyhow::{bail, Context, Result};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use ndarray::{Array, Array3};
@@ -856,12 +857,43 @@ pub fn load_voice_style(voice_style_paths: &[String], verbose: bool) -> Result<S
     })
 }
 
-/// Load TTS components
-pub fn load_text_to_speech(onnx_dir: &str, use_gpu: bool) -> Result<TextToSpeech> {
-    if use_gpu {
-        anyhow::bail!("GPU mode is not supported yet");
+fn load_supertonic_session(path: &str, provider: SupertonicProvider) -> Result<Session> {
+    let mut builder = Session::builder()?;
+    match provider {
+        SupertonicProvider::Cpu => Ok(builder.commit_from_file(path)?),
+        SupertonicProvider::WebgpuVulkan => {
+            #[cfg(feature = "supertonic-webgpu")]
+            {
+                use ort::ep::webgpu::DawnBackendType;
+                use ort::ep::{ExecutionProvider, WebGPU};
+
+                let provider = WebGPU::default()
+                    .with_dawn_backend_type(DawnBackendType::Vulkan)
+                    .build()
+                    .error_on_failure();
+                let builder = builder
+                    .with_execution_providers([provider])
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                let mut builder = builder
+                    .with_disable_cpu_fallback()
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                Ok(builder.commit_from_file(path)?)
+            }
+            #[cfg(not(feature = "supertonic-webgpu"))]
+            {
+                let _ = builder;
+                anyhow::bail!(
+                    "Supertonic webgpu-vulkan requires a build with \
+                     --features supertonic-webgpu"
+                )
+            }
+        }
     }
-    println!("Using CPU for inference\n");
+}
+
+/// Load all TTS components with one explicitly selected execution provider.
+pub fn load_text_to_speech(onnx_dir: &str, provider: SupertonicProvider) -> Result<TextToSpeech> {
+    println!("Using {provider:?} for Supertonic inference\n");
 
     let cfgs = load_cfgs(onnx_dir)?;
 
@@ -870,10 +902,10 @@ pub fn load_text_to_speech(onnx_dir: &str, use_gpu: bool) -> Result<TextToSpeech
     let vector_est_path = format!("{}/vector_estimator.onnx", onnx_dir);
     let vocoder_path = format!("{}/vocoder.onnx", onnx_dir);
 
-    let dp_ort = Session::builder()?.commit_from_file(&dp_path)?;
-    let text_enc_ort = Session::builder()?.commit_from_file(&text_enc_path)?;
-    let vector_est_ort = Session::builder()?.commit_from_file(&vector_est_path)?;
-    let vocoder_ort = Session::builder()?.commit_from_file(&vocoder_path)?;
+    let dp_ort = load_supertonic_session(&dp_path, provider)?;
+    let text_enc_ort = load_supertonic_session(&text_enc_path, provider)?;
+    let vector_est_ort = load_supertonic_session(&vector_est_path, provider)?;
+    let vocoder_ort = load_supertonic_session(&vocoder_path, provider)?;
 
     let unicode_indexer_path = format!("{}/unicode_indexer.json", onnx_dir);
     let text_processor = UnicodeProcessor::new(&unicode_indexer_path)?;

@@ -343,6 +343,9 @@ function catalogOption(entry) {
   const variant = entry.selected_variant;
   const accelerator = variant?.accelerator || "unavailable";
   const endpoint = variant?.endpoint || "";
+  const hostManaged = entry.host_managed === true;
+  const runtimeState = entry.runtime_state || (hostManaged ? "unknown" : "external");
+  const runtimeReason = entry.runtime_reason || "";
   const env =
     entry.stage === "asr"
       ? { S2S_WHISPER_URL: endpoint }
@@ -359,8 +362,8 @@ function catalogOption(entry) {
     stars: resourceStars(entry.resources, entry.id),
     gpuSupport: gpuSupportFromVariants(entry.variants),
     languageLabels: languageLabelsFromCatalog(entry.languages),
-    meta: `${entry.model || entry.protocol} · ${accelerator}`,
-    available: entry.available === true,
+    meta: `${entry.model || entry.protocol} · ${accelerator}${hostManaged ? " · Windows host" : ""}`,
+    available: entry.available === true && runtimeState !== "unavailable",
     installed: entry.installed === true,
     bundled: entry.bundled === true,
     downloadState: entry.download_state || (entry.installed ? "installed" : "missing"),
@@ -370,10 +373,15 @@ function catalogOption(entry) {
     downloadError: entry.download_error || "",
     defaultVoice: entry.default_voice || "",
     voices: Array.isArray(entry.voices) ? entry.voices.filter(Boolean) : [],
+    hostManaged,
+    runtimeState,
+    runtimeReason,
     env,
-    note: entry.available
-      ? `${variant.id}${variant.stable ? "" : " · experimental"}`
-      : entry.reason || "Auf diesem System nicht verfügbar",
+    note: runtimeReason
+      ? `Host-Agent: ${runtimeReason}`
+      : entry.available
+        ? `${variant.id}${variant.stable ? "" : " · experimental"}${hostManaged ? ` · ${runtimeState}` : ""}`
+        : entry.reason || "Auf diesem System nicht verfügbar",
   };
 }
 
@@ -382,7 +390,7 @@ async function loadBackendCatalog({ quiet = false } = {}) {
     const response = await fetch("/api/v1/catalog", { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const catalog = await response.json();
-    if (catalog.schema_version !== 1 || !Array.isArray(catalog.backends)) {
+    if (![1, 2].includes(catalog.schema_version) || !Array.isArray(catalog.backends)) {
       throw new Error("unsupported catalog response");
     }
     const options = catalog.backends.map(catalogOption);

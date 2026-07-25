@@ -154,11 +154,39 @@ The original Python stack hard-wires PyTorch devices (`cuda` / `mps` / `cpu`) fo
 
 ## Quick start (Windows)
 
+For Intel Arc on Docker Desktop, keep the controller and web UI in Docker and
+run Vulkan backends through the native allowlisted host supervisor. First copy
+any existing named-volume data without deleting or overwriting it:
+
+```powershell
+.\scripts\migrate_windows_volumes.ps1
+$env:S2S_MODELS_HOST_DIR = "$PWD\models"
+$env:S2S_DATA_HOST_DIR = "$PWD\data"
+$env:S2S_ALLOW_EXPERIMENTAL = "true"
+.\scripts\host_idle_agent.ps1
+```
+
+In a second terminal start the Windows overlay:
+
+```powershell
+docker compose -f docker-compose.yml -f docker/docker-compose.windows.yml `
+  --profile backends --profile web up -d --build
+```
+
+The agent reports `vulkaninfo` device data and configured profiles in
+`data\host-agent\status.json`. It accepts only UUID command files emitted by the
+controller, fixed backend/profile/port combinations, configured executables and
+model paths below `S2S_MODELS_HOST_DIR`. Unknown commands and unmanaged port
+owners are rejected. Vulkan variants remain hidden unless
+`S2S_ALLOW_EXPERIMENTAL=true`; Higgs has no Vulkan variant.
+
 ### 1. Build this app
 
 ```powershell
 cd s2s-vulkan
 cargo build --release
+# Native Supertonic WebGPU/Vulkan sidecar:
+cargo build --release --features supertonic-webgpu
 ```
 
 ### 2. Build Vulkan backends
@@ -336,7 +364,7 @@ Turn taking: after VAD emits a final segment, listening pauses until TTS signals
 | `--tts` | Engine | GPU |
 |--------|--------|-----|
 | `auto` (default) | Supertonic if models present, else system | — |
-| `supertonic` | Supertonic 3 (ONNX Runtime **CPU**; sidecar in the lab) | not Vulkan |
+| `supertonic` | Supertonic 3 (ONNX Runtime CPU; optional native WebGPU/Dawn Vulkan sidecar) | CPU / experimental Vulkan |
 | `http` | External server (Qwen3/qwentts, Kokoro, **Higgs TTS 3**, `supertonic serve`, …) | depends on server |
 | `piper` | Piper CLI | CPU |
 | `system` | Windows SAPI / espeak-ng | CPU |
@@ -345,6 +373,10 @@ Turn taking: after VAD emits a final segment, listening pauses until TTS signals
 
 When the last lab WebSocket client disconnects, managed ASR/TTS/LLM containers
 are stopped after **2 minutes** (`S2S_LAB_IDLE_UNLOAD_SECS=120`) to free GPU/RAM.
+All managed ASR/TTS/LLM sidecars are parked (including containers behind a host
+variant such as VibeVoice). The Windows supervisor stops only native child PIDs
+that it started. The older `/data/idle-unload.request` and
+`/data/idle-reload.request` files remain accepted as compatibility inputs.
 Reconnecting cancels the timer; if models were already parked they are started
 and warmed again. Set `S2S_LAB_IDLE_UNLOAD_SECS=0` to disable.
 

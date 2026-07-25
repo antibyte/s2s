@@ -8,6 +8,10 @@ readme = "README.md"
 keywords = ["speech", "vad", "stt", "tts", "vulkan", "whisper", "llama"]
 categories = ["multimedia::audio", "command-line-utilities"]
 
+[features]
+default = []
+supertonic-webgpu = ["ort/webgpu"]
+
 [[bin]]
 name = "s2s-vulkan"
 path = "src/main.rs"
@@ -36,7 +40,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 rubato = "0.16"
 byteorder = "1"
 
-# Supertonic 3 (ONNX Runtime CPU) — not GGML/Vulkan
+# Supertonic 3. CPU is the default; `supertonic-webgpu` adds Dawn/WebGPU.
 # ndarray 0.17 must match ort's dependency (avoid dual ndarray versions).
 ort = { version = "2.0.0-rc.12", features = ["download-binaries", "ndarray"] }
 ndarray = { version = "0.17", features = ["rayon"] }

@@ -1,4 +1,4 @@
-//! In-process Supertonic 3 TTS via ONNX Runtime (CPU).
+//! In-process Supertonic 3 TTS via ONNX Runtime.
 //!
 //! Not GGML/Vulkan — same audio contract as Piper/System/HTTP:
 //! returns mono PCM `Vec<i16>` + sample rate.
@@ -34,7 +34,7 @@ impl SupertonicEngine {
         let onnx_dir = resolve_onnx_dir(cfg)?;
         let voice_path = resolve_voice_path(cfg, &onnx_dir)?;
 
-        let tts = load_text_to_speech(onnx_dir.to_str().unwrap_or("."), false)
+        let tts = load_text_to_speech(onnx_dir.to_str().unwrap_or("."), cfg.supertonic_provider)
             .with_context(|| format!("load Supertonic ONNX from {}", onnx_dir.display()))?;
 
         let style = load_voice_style(&[voice_path.to_string_lossy().into_owned()], true)
@@ -44,8 +44,9 @@ impl SupertonicEngine {
         let default_lang = cfg.resolve_tts_language(None);
 
         info!(
-            "Supertonic: loading ONNX from {} (CPU), voice={}, default_lang={}",
+            "Supertonic: loading ONNX from {} (provider={:?}), voice={}, default_lang={}",
             onnx_dir.display(),
+            cfg.supertonic_provider,
             voice_path.display(),
             default_lang
         );

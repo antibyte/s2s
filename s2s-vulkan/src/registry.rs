@@ -72,6 +72,20 @@ pub struct BackendVariant {
     pub health_path: String,
     #[serde(default)]
     pub environment: BTreeMap<String, String>,
+    /// Optional model files for this runtime representation. Empty keeps the
+    /// backend-level artifact list for schema-v1 compatibility.
+    #[serde(default)]
+    pub artifacts: Vec<ModelArtifact>,
+    /// Optional bundled override for host runtimes whose files are not baked
+    /// into the container image.
+    #[serde(default)]
+    pub bundled: Option<bool>,
+    /// Optional protocol override (for example faster-whisper -> whisper-cpp).
+    #[serde(default)]
+    pub protocol: String,
+    /// Allowlisted native host launcher profile. Empty means container/remote.
+    #[serde(default)]
+    pub host_profile: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -137,6 +151,9 @@ pub struct CatalogBackendStatus {
     pub downloaded_bytes: u64,
     pub deletable: bool,
     pub download_error: String,
+    pub host_managed: bool,
+    pub runtime_state: String,
+    pub runtime_reason: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -214,9 +231,9 @@ impl BackendCatalog {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != 1 {
+        if !matches!(self.schema_version, 1 | 2) {
             bail!(
-                "unsupported backend catalog schema_version={} (expected 1)",
+                "unsupported backend catalog schema_version={} (expected 1 or 2)",
                 self.schema_version
             );
         }
@@ -230,30 +247,19 @@ impl BackendCatalog {
             if backend.variants.is_empty() {
                 bail!("backend '{}' has no variants", backend.id);
             }
-            if !backend.bundled && backend.artifacts.is_empty() {
+            if !backend.bundled
+                && backend.artifacts.is_empty()
+                && backend
+                    .variants
+                    .iter()
+                    .all(|variant| variant.bundled != Some(true) && variant.artifacts.is_empty())
+            {
                 bail!(
                     "backend '{}' is neither bundled nor backed by downloadable artifacts",
                     backend.id
                 );
             }
-            for artifact in &backend.artifacts {
-                validate_artifact_path(&artifact.path)?;
-                if !artifact.sha256.is_empty()
-                    && (artifact.sha256.len() != 64
-                        || !artifact.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()))
-                {
-                    bail!(
-                        "backend '{}' artifact '{}' has an invalid SHA-256",
-                        backend.id,
-                        artifact.path
-                    );
-                }
-                if !(artifact.source.starts_with("https://")
-                    || artifact.source.starts_with("http://"))
-                {
-                    bail!("backend '{}' artifact source must be http(s)", backend.id);
-                }
-            }
+            validate_artifacts(&backend.id, &backend.artifacts)?;
             for variant in &backend.variants {
                 validate_id(&variant.id, "variant")?;
                 if !variant_belongs_to_backend(&backend.id, &variant.id) {
@@ -285,6 +291,36 @@ impl BackendCatalog {
                 if !variant.native_endpoint.is_empty() {
                     validate_http_url(&variant.native_endpoint)?;
                 }
+                validate_artifacts(&variant.id, &variant.artifacts)?;
+                if !variant.host_profile.is_empty() && !is_known_host_profile(&variant.host_profile)
+                {
+                    bail!(
+                        "variant '{}' has unknown host profile '{}'",
+                        variant.id,
+                        variant.host_profile
+                    );
+                }
+                if !variant.host_profile.is_empty() && !variant.container.is_empty() {
+                    bail!(
+                        "variant '{}' cannot declare both host_profile and container",
+                        variant.id
+                    );
+                }
+                if !variant.protocol.is_empty() && !is_known_protocol(&variant.protocol) {
+                    bail!(
+                        "variant '{}' has unknown protocol '{}'",
+                        variant.id,
+                        variant.protocol
+                    );
+                }
+                if !variant_bundled(backend, variant)
+                    && variant_artifacts(backend, variant).is_empty()
+                {
+                    bail!(
+                        "variant '{}' is not bundled and has no downloadable artifacts",
+                        variant.id
+                    );
+                }
             }
         }
         for preset in &self.presets {
@@ -307,17 +343,35 @@ impl BackendCatalog {
         self.backends
             .iter()
             .cloned()
-            .map(|backend| {
+            .map(|mut backend| {
                 let selected_variant = resolve_variant(&backend, hw).cloned();
+                let bundled = selected_variant
+                    .as_ref()
+                    .map(|variant| variant_bundled(&backend, variant))
+                    .unwrap_or(backend.bundled);
+                let artifacts = selected_variant
+                    .as_ref()
+                    .map(|variant| variant_artifacts(&backend, variant).to_vec())
+                    .unwrap_or_else(|| backend.artifacts.clone());
+                let protocol = selected_variant
+                    .as_ref()
+                    .map(|variant| variant_protocol(&backend, variant).to_string())
+                    .unwrap_or_else(|| backend.protocol.clone());
+                let host_managed = selected_variant
+                    .as_ref()
+                    .is_some_and(|variant| !variant.host_profile.is_empty());
                 let available = selected_variant.is_some();
                 let reason = if available {
                     String::new()
                 } else {
                     incompatibility_reason(&backend, hw)
                 };
+                backend.bundled = bundled;
+                backend.artifacts = artifacts;
+                backend.protocol = protocol;
                 CatalogBackendStatus {
-                    installed: backend.bundled,
-                    download_state: if backend.bundled {
+                    installed: bundled,
+                    download_state: if bundled {
                         "bundled".into()
                     } else {
                         "missing".into()
@@ -328,8 +382,15 @@ impl BackendCatalog {
                         .map(|artifact| artifact.size)
                         .sum(),
                     downloaded_bytes: 0,
-                    deletable: !backend.bundled,
+                    deletable: !bundled,
                     download_error: String::new(),
+                    host_managed,
+                    runtime_state: if host_managed {
+                        "unknown".into()
+                    } else {
+                        "not_managed".into()
+                    },
+                    runtime_reason: String::new(),
                     backend,
                     available,
                     reason,
@@ -337,6 +398,32 @@ impl BackendCatalog {
                 }
             })
             .collect()
+    }
+}
+
+pub fn variant_artifacts<'a>(
+    backend: &'a BackendDefinition,
+    variant: &'a BackendVariant,
+) -> &'a [ModelArtifact] {
+    if variant.artifacts.is_empty() {
+        backend.artifacts.as_slice()
+    } else {
+        variant.artifacts.as_slice()
+    }
+}
+
+pub fn variant_bundled(backend: &BackendDefinition, variant: &BackendVariant) -> bool {
+    variant.bundled.unwrap_or(backend.bundled)
+}
+
+pub fn variant_protocol<'a>(
+    backend: &'a BackendDefinition,
+    variant: &'a BackendVariant,
+) -> &'a str {
+    if variant.protocol.is_empty() {
+        backend.protocol.as_str()
+    } else {
+        variant.protocol.as_str()
     }
 }
 
@@ -490,6 +577,25 @@ fn validate_artifact_path(path: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_artifacts(owner: &str, artifacts: &[ModelArtifact]) -> Result<()> {
+    for artifact in artifacts {
+        validate_artifact_path(&artifact.path)?;
+        if !artifact.sha256.is_empty()
+            && (artifact.sha256.len() != 64
+                || !artifact.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        {
+            bail!(
+                "'{owner}' artifact '{}' has an invalid SHA-256",
+                artifact.path
+            );
+        }
+        if !(artifact.source.starts_with("https://") || artifact.source.starts_with("http://")) {
+            bail!("'{owner}' artifact source must be http(s)");
+        }
+    }
+    Ok(())
+}
+
 fn validate_container_name(name: &str) -> Result<()> {
     if name.len() > 128
         || !name
@@ -519,6 +625,33 @@ fn validate_http_url(url: &str) -> Result<()> {
 
 fn is_known_accelerator(value: &str) -> bool {
     matches!(value, "vulkan" | "cuda" | "sycl" | "cpu" | "remote")
+}
+
+pub fn is_known_host_profile(value: &str) -> bool {
+    matches!(
+        value,
+        "crispasr-whisper"
+            | "crispasr-parakeet"
+            | "crispasr-voxtral"
+            | "crispasr-kokoro"
+            | "crispasr-vibevoice"
+            | "llama-granite"
+            | "qwen-vulkan"
+            | "supertonic-webgpu"
+    )
+}
+
+fn is_known_protocol(value: &str) -> bool {
+    matches!(
+        value,
+        "faster-whisper"
+            | "whisper-cpp"
+            | "parakeet"
+            | "voxtral"
+            | "openai-tts"
+            | "openai-tts-pcm"
+            | "openai-chat"
+    )
 }
 
 fn env_truthy(key: &str) -> bool {
@@ -594,12 +727,10 @@ mod tests {
         assert_eq!(backend.model, "bosonai/higgs-tts-3-4b");
         assert_eq!(backend.native_sample_rate, 24_000);
         assert_eq!(backend.default_voice, "default");
-        assert!(
-            backend
-                .artifacts
-                .iter()
-                .any(|a| a.path.ends_with("model.safetensors") && a.size > 9_000_000_000)
-        );
+        assert!(backend
+            .artifacts
+            .iter()
+            .any(|a| a.path.ends_with("model.safetensors") && a.size > 9_000_000_000));
         let cuda = backend
             .variants
             .iter()
@@ -686,18 +817,14 @@ mod tests {
         assert!(backend.voices.iter().any(|v| v == "emma"));
         assert!(backend.voices.iter().any(|v| v.contains("de-")));
         assert_eq!(backend.native_sample_rate, 24_000);
-        assert!(
-            backend
-                .artifacts
-                .iter()
-                .any(|a| a.path.contains("q4_k.gguf") && a.size > 600_000_000)
-        );
-        assert!(
-            backend
-                .variants
-                .iter()
-                .any(|v| v.id == "vibevoice-realtime-0.5b-cpu" && v.accelerator == "cpu")
-        );
+        assert!(backend
+            .artifacts
+            .iter()
+            .any(|a| a.path.contains("q4_k.gguf") && a.size > 600_000_000));
+        assert!(backend
+            .variants
+            .iter()
+            .any(|v| v.id == "vibevoice-realtime-0.5b-cpu" && v.accelerator == "cpu"));
         // remote host ranks above cpu when both are stable.
         let selected = resolve_variant(backend, &hw("intel", &["sycl", "cpu"])).unwrap();
         assert_eq!(selected.id, "vibevoice-realtime-0.5b-host");
@@ -711,12 +838,10 @@ mod tests {
         assert_eq!(backend.stage, BackendStage::Asr);
         assert_eq!(backend.model, "mistralai/Voxtral-Mini-4B-Realtime-2602");
         assert!(backend.resources.stars.vram >= 4);
-        assert!(
-            backend
-                .artifacts
-                .iter()
-                .any(|a| a.path.ends_with("model.safetensors") && a.size > 8_000_000_000)
-        );
+        assert!(backend
+            .artifacts
+            .iter()
+            .any(|a| a.path.ends_with("model.safetensors") && a.size > 8_000_000_000));
         let mut nvidia = hw("nvidia", &["cuda", "cpu"]);
         nvidia.allow_experimental = true;
         assert_eq!(
@@ -764,5 +889,96 @@ mod tests {
         let mut catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
         catalog.backends[0].variants[0].id = "local-fallback-cuda".into();
         assert!(catalog.validate().is_err());
+    }
+
+    #[test]
+    fn schema_one_remains_readable() {
+        let mut catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        catalog.schema_version = 1;
+        catalog.validate().unwrap();
+    }
+
+    #[test]
+    fn variant_metadata_overrides_backend_artifacts_and_protocol() {
+        let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let backend = catalog.find("fw-tiny").unwrap();
+        let variant = backend
+            .variants
+            .iter()
+            .find(|variant| variant.id == "fw-tiny-vulkan-windows-b580")
+            .unwrap();
+
+        assert!(!variant_bundled(backend, variant));
+        assert_eq!(variant_protocol(backend, variant), "whisper-cpp");
+        assert_eq!(
+            variant_artifacts(backend, variant)[0].path,
+            "whisper/ggml-tiny.bin"
+        );
+        assert_eq!(variant.host_profile, "crispasr-whisper");
+
+        let mut hardware = hw("intel", &["vulkan", "cpu"]);
+        hardware.platform = "windows".into();
+        hardware.allow_experimental = true;
+        let resolved = catalog
+            .resolved(&hardware)
+            .into_iter()
+            .find(|status| status.backend.id == "fw-tiny")
+            .unwrap();
+        assert!(!resolved.backend.bundled);
+        assert_eq!(resolved.backend.protocol, "whisper-cpp");
+        assert_eq!(
+            resolved.backend.artifacts[0].path,
+            "whisper/ggml-tiny.bin"
+        );
+    }
+
+    #[test]
+    fn b580_vulkan_variants_require_experimental_opt_in() {
+        let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let mut hardware = hw("intel", &["vulkan", "cpu"]);
+        hardware.platform = "windows".into();
+
+        let supertonic = catalog.find("supertonic").unwrap();
+        assert_eq!(
+            resolve_variant(supertonic, &hardware).map(|variant| variant.id.as_str()),
+            Some("supertonic-cpu")
+        );
+
+        hardware.allow_experimental = true;
+        let expected = [
+            ("fw-tiny", "fw-tiny-vulkan-windows-b580"),
+            (
+                "parakeet-tdt-0.6b-v3",
+                "parakeet-tdt-0.6b-v3-vulkan-windows-b580",
+            ),
+            (
+                "voxtral-mini-4b-realtime",
+                "voxtral-mini-4b-realtime-vulkan-windows-b580",
+            ),
+            ("supertonic", "supertonic-webgpu-vulkan-windows-b580"),
+            ("qwen3-tts-0.6b", "qwen3-tts-vulkan-windows-b580"),
+            ("kokoro", "kokoro-vulkan-windows-b580"),
+            (
+                "vibevoice-realtime-0.5b",
+                "vibevoice-realtime-0.5b-vulkan-windows-b580",
+            ),
+            ("local-fallback", "local-fallback-vulkan-windows-b580"),
+        ];
+        for (backend_id, variant_id) in expected {
+            let selected = resolve_variant(catalog.find(backend_id).unwrap(), &hardware).unwrap();
+            assert_eq!(selected.id, variant_id);
+            assert!(!selected.host_profile.is_empty());
+        }
+    }
+
+    #[test]
+    fn higgs_has_no_vulkan_or_host_managed_variant() {
+        let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let higgs = catalog.find("higgs-tts-3-4b").unwrap();
+        assert!(higgs.variants.iter().all(|variant| {
+            variant.accelerator != "vulkan"
+                && variant.host_profile.is_empty()
+                && !variant.id.contains("vulkan")
+        }));
     }
 }
