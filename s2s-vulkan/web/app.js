@@ -790,8 +790,10 @@ async function sendStackToBackend({ voiceOnly = false } = {}) {
       // Host TTS probe is ~12s; allow multi-stage warm but never hang forever.
       signal: AbortSignal.timeout(180_000),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const status = await response.json();
+    const status = await response.json().catch(() => ({}));
+    if (!response.ok || status.ok === false) {
+      throw new Error(status.message || status.error || `HTTP ${response.status}`);
+    }
     handlePipelineEvent(
       JSON.stringify({
         type: "stack",
@@ -802,21 +804,6 @@ async function sendStackToBackend({ voiceOnly = false } = {}) {
     );
     clearSwapBusy();
   } catch (error) {
-    // Standalone development pages may not proxy /api yet. Preserve the
-    // previous WebSocket control message as a compatibility fallback.
-    if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-      state.ws.send(
-        JSON.stringify({
-          type: "set_stack",
-          ...(voiceOnly
-            ? { voice: lab.voice }
-            : { asr: lab.asr, tts: lab.tts, llm: lab.llm, voice: lab.voice }),
-        })
-      );
-      // WS path has no response — free controls after a short grace period.
-      window.setTimeout(clearSwapBusy, 2_500);
-      return;
-    }
     clearSwapBusy();
     setHint(copy.hintStackErr(error.message), { error: true, sticky: true });
     showToast(copy.hintStackErr(error.message), { error: true });

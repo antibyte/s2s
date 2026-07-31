@@ -513,11 +513,13 @@ struct IdleUnloadState {
 pub struct LabController {
     catalog: Arc<BackendCatalog>,
     hardware: HardwareProfile,
-    runtime: SharedRuntime,
+    /// Shared with the gateway ASR/TTS proxy.
+    pub(crate) runtime: SharedRuntime,
     control: Arc<dyn ContainerControl>,
     host_runtime: HostRuntimeClient,
     docker_control_enabled: bool,
-    client: reqwest::Client,
+    /// Shared HTTP client for health probes and gateway proxying.
+    pub(crate) client: reqwest::Client,
     download_client: reqwest::Client,
     state: Arc<RwLock<ControllerState>>,
     asr_lock: Arc<Mutex<()>>,
@@ -3836,6 +3838,52 @@ mod tests {
         assert!(!result.ok);
         assert_eq!(before.asr, after.asr);
         assert_eq!(before.whisper_url, after.whisper_url);
+    }
+
+    #[tokio::test]
+    async fn asr_switch_without_llm_id_preserves_active_llm() {
+        let runtime = runtime::runtime_from(test_config());
+        let control = Arc::new(FakeControl::default());
+        control.running.lock().await.insert("asr-a".into());
+        let lab =
+            LabController::with_control(switch_catalog(), cpu_hardware(), runtime, control, true)
+                .unwrap();
+        {
+            let mut state = lab.state.write().await;
+            state.asr = Some(ActiveBackend {
+                backend_id: "asr-a".into(),
+                variant_id: "asr-a-cpu".into(),
+                accelerator: "cpu".into(),
+                endpoint: String::new(),
+                container: "asr-a".into(),
+            });
+            state.llm = Some(ActiveBackend {
+                backend_id: "llm-kept".into(),
+                variant_id: "llm-kept-cpu".into(),
+                accelerator: "cpu".into(),
+                endpoint: "http://127.0.0.1:9999".into(),
+                container: "llm-kept".into(),
+            });
+        }
+
+        let result = lab
+            .activate(ActivateStackRequest {
+                asr_id: Some("asr-b".into()),
+                tts_id: None,
+                llm_id: None,
+                voice: None,
+            })
+            .await;
+
+        assert!(result.ok, "{}", result.message);
+        assert_eq!(
+            result.asr.as_ref().map(|item| item.backend_id.as_str()),
+            Some("asr-b")
+        );
+        assert_eq!(
+            result.llm.as_ref().map(|item| item.backend_id.as_str()),
+            Some("llm-kept")
+        );
     }
 
     #[tokio::test]

@@ -926,10 +926,7 @@ mod tests {
             .unwrap();
         assert!(!resolved.backend.bundled);
         assert_eq!(resolved.backend.protocol, "whisper-cpp");
-        assert_eq!(
-            resolved.backend.artifacts[0].path,
-            "whisper/ggml-tiny.bin"
-        );
+        assert_eq!(resolved.backend.artifacts[0].path, "whisper/ggml-tiny.bin");
     }
 
     #[test]

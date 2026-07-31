@@ -1,0 +1,14 @@
+# Optional bridge for a native AuraGo process on the same host.
+#
+# Usage:
+#   S2S_LAB_IDLE_UNLOAD_SECS=0 docker compose \
+#     -f docker-compose.yml -f docker/docker-compose.aurago-host.yml \
+#     --profile backends --profile managed --profile web up -d
+#
+# Containerized AuraGo should join the private s2s Docker network instead and
+# must not apply this overlay.
+
+services:
+  s2s:
+    ports:
+      - "127.0.0.1:8765:8765"

@@ -117,10 +117,20 @@ pub async fn run_stt(
 
 async fn transcribe(client: &reqwest::Client, cfg: &Config, audio: &VadAudio) -> Result<String> {
     let wav = encode_wav_f32(&audio.samples, audio.sample_rate)?;
+    transcribe_wav_bytes(client, cfg, &wav).await
+}
+
+/// Transcribe a WAV byte buffer via the active whisper-compatible `/inference` endpoint.
+/// Used by the AuraGo gateway and the pipeline STT handler.
+pub(crate) async fn transcribe_wav_bytes(
+    client: &reqwest::Client,
+    cfg: &Config,
+    wav: &[u8],
+) -> Result<String> {
     let url = format!("{}/inference", cfg.whisper_url.trim_end_matches('/'));
 
     // whisper-server multipart fields (ggml-org/whisper.cpp examples/server).
-    let file_part = Part::bytes(wav)
+    let file_part = Part::bytes(wav.to_vec())
         .file_name("audio.wav")
         .mime_str("audio/wav")?;
 

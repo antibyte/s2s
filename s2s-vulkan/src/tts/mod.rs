@@ -446,8 +446,7 @@ fn http_wants_pcm(cfg: &Config) -> bool {
         return false;
     }
     // Higgs SGLang/vLLM-Omni default is WAV; non-stream PCM is less reliable across stacks.
-    if m.contains("higgs") || u.contains("higgs") || u.contains("8086") || u.contains("tts-higgs")
-    {
+    if m.contains("higgs") || u.contains("higgs") || u.contains("8086") || u.contains("tts-higgs") {
         return false;
     }
     // CrispASR VibeVoice defaults to WAV (24 kHz mono).
@@ -467,6 +466,27 @@ struct TtsStreamStats {
     samples: usize,
     first_audio_ms: f64,
     total_ms: f64,
+}
+
+pub(crate) fn apply_preloaded_voice_policy(body: &mut serde_json::Value, model: &str) {
+    let model_name = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
+    // These servers load a baked/default voice at process start; a mismatched
+    // OpenAI-style voice name is ignored or rejected.
+    let drop_voice = model_name == "kokoro"
+        || model_name == "chatterbox"
+        || model_name == "piper"
+        || model_name.contains("omnivoice")
+        || model_name.contains("inflect")
+        || model_name.contains("chatterbox"); // ResembleAI/chatterbox path
+    if drop_voice {
+        if let Some(object) = body.as_object_mut() {
+            object.remove("voice");
+        }
+    }
 }
 
 /// Pull OpenAI-style / Qwen / Kokoro audio (`response_format=pcm|wav`).
@@ -577,12 +597,41 @@ async fn stream_http(
 }
 
 fn http_is_qwen(cfg: &Config) -> bool {
+    http_is_qwen_public(cfg)
+}
+
+/// Public alias for the gateway language routing path.
+pub(crate) fn http_is_qwen_public(cfg: &Config) -> bool {
     let model = cfg.tts_model.to_ascii_lowercase();
     let url = cfg.tts_url.to_ascii_lowercase();
+    // Port 8083 is ambiguous (Supertonic compose uses 8083 in some stacks; qwen
+    // SYCL often uses 8083). Prefer model/url name — never treat "supertonic" as Qwen.
+    if model.contains("supertonic") || url.contains("supertonic") {
+        return false;
+    }
     model.contains("qwen")
         || url.contains("qwen")
-        || url.contains(":8083/")
-        || url.ends_with(":8083")
+        || url.contains("qwen-sycl")
+        || url.contains("tts-qwen")
+}
+
+/// Map language tags to ISO-ish codes accepted by Supertonic / OpenAI-style TTS.
+pub(crate) fn iso_tts_language(code: &str) -> String {
+    let c = code.trim().to_ascii_lowercase();
+    match c.as_str() {
+        "german" | "deutsch" | "deu" | "ger" => "de".into(),
+        "english" | "eng" => "en".into(),
+        "chinese" | "cmn" | "zh-cn" | "zh-tw" | "cn" => "zh".into(),
+        "french" | "fra" | "fre" => "fr".into(),
+        "spanish" | "spa" => "es".into(),
+        "italian" | "ita" => "it".into(),
+        "portuguese" | "por" => "pt".into(),
+        "japanese" | "jpn" => "ja".into(),
+        "korean" | "kor" => "ko".into(),
+        "russian" | "rus" => "ru".into(),
+        "auto" | "" => "en".into(),
+        other => other.to_string(),
+    }
 }
 
 fn http_is_higgs(cfg: &Config) -> bool {

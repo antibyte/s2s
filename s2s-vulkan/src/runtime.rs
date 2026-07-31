@@ -445,7 +445,10 @@ fn apply_asr(rt: &mut RuntimeState, id: &str) -> Option<String> {
         }
         "parakeet-tdt-0.6b-v3" | "parakeet" => {
             rt.cfg.whisper_url = "http://127.0.0.1:8082".into();
-            Some(format!("ASR → Parakeet HTTP ({id}) @ {}", rt.cfg.whisper_url))
+            Some(format!(
+                "ASR → Parakeet HTTP ({id}) @ {}",
+                rt.cfg.whisper_url
+            ))
         }
         "voxtral-mini-4b-realtime" | "voxtral" => {
             rt.cfg.whisper_url = "http://127.0.0.1:8087".into();

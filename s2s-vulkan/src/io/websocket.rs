@@ -3,26 +3,32 @@
 use crate::audio::pcm::i16_to_bytes_le;
 use crate::benchmark::{BenchmarkRating, BenchmarkRequest, BenchmarkService};
 use crate::config::Config;
+use crate::gateway::GatewaySpeechRequest;
 use crate::gpu::GpuReport;
 use crate::lab::{ActivateStackRequest, LabController};
 use crate::messages::{Control, PipelineEvent, QueueItem};
 use crate::pipeline::{spawn_pipeline_shared, PipelineHandles};
 use crate::registry::{BackendCatalog, HardwareProfile};
 use crate::runtime::{self, SharedRuntime, StackSelection, StackStatus};
-use anyhow::Result;
+use anyhow::{Context, Result};
+use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket};
-use axum::extract::{Path, Query, State, WebSocketUpgrade};
-use axum::http::{header, StatusCode};
+use axum::extract::{Path, Query, Request, State, WebSocketUpgrade};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::{SinkExt, StreamExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
 use tracing::{error, info, warn};
+
+const MAX_ASR_WAV_BYTES: usize = 8 * 1024 * 1024;
+const MAX_ASR_REQUEST_BYTES: usize = MAX_ASR_WAV_BYTES + 64 * 1024;
 
 #[derive(Clone)]
 struct AppState {
@@ -49,17 +55,26 @@ pub async fn run_websocket_server(cfg: Config, gpu_report: GpuReport) -> Result<
     let app = Router::new()
         .route("/", get(ws_upgrade))
         .route("/ws", get(ws_upgrade))
+        .route("/health", get(get_health))
+        .route("/ready", get(get_ready))
+        // Stable ASR/TTS gateway for AuraGo (paths fixed across stack switches).
+        .route("/v1/audio/transcriptions", post(post_gateway_transcribe))
+        .route("/api/v1/asr", post(post_gateway_transcribe))
+        .route("/v1/audio/speech", post(post_gateway_speech))
+        .route("/api/v1/tts", post(post_gateway_speech))
         .route("/api/v1/catalog", get(get_catalog))
+        .route("/api/v1/capability", get(get_capability))
+        .route("/api/v1/suggestions", get(get_suggestions))
         .route("/api/v1/stack", get(get_stack).put(put_stack))
         .route(
             "/api/v1/models/{backend_id}/download",
-            axum::routing::post(post_model_download).delete(delete_model_download),
+            post(post_model_download).delete(delete_model_download),
         )
         .route(
             "/api/v1/models/{backend_id}",
             axum::routing::delete(delete_model),
         )
-        .route("/api/v1/benchmarks", axum::routing::post(post_benchmark))
+        .route("/api/v1/benchmarks", post(post_benchmark))
         .route("/api/v1/benchmarks/{id}", get(get_benchmark))
         .route(
             "/api/v1/benchmarks/{id}/audio/{sample_index}",
@@ -67,19 +82,361 @@ pub async fn run_websocket_server(cfg: Config, gpu_report: GpuReport) -> Result<
         )
         .route(
             "/api/v1/benchmarks/{id}/ratings",
-            axum::routing::post(post_benchmark_rating),
+            post(post_benchmark_rating),
         )
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    info!("Speech lab listening on http://{addr} (WebSocket PCM + catalog/stack/benchmark API)");
+    info!(
+        "Speech lab listening on http://{addr} (gateway ASR/TTS + catalog/capability/suggestions/stack)"
+    );
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
 }
 
+async fn get_health() -> impl IntoResponse {
+    Json(LabController::health_ok())
+}
+
+async fn get_ready(State(state): State<AppState>) -> Response {
+    let ready = state.lab.gateway_ready().await;
+    let status = readiness_http_status(ready.ready);
+    (status, Json(ready)).into_response()
+}
+
+fn readiness_http_status(ready: bool) -> StatusCode {
+    if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
+}
+
+async fn post_gateway_transcribe(State(state): State<AppState>, req: Request) -> Response {
+    let language_header = req
+        .headers()
+        .get("x-language")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let content_type = req
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let body = match axum::body::to_bytes(req.into_body(), MAX_ASR_REQUEST_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(serde_json::json!({ "error": format!("ASR request exceeds 8 MiB: {error}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let (wav, language_form) = match extract_wav_and_language(&content_type, &body).await {
+        Ok(value) => value,
+        Err(error) => {
+            let message = format!("{error:#}");
+            let status = if message.contains("exceeds 8 MiB") {
+                StatusCode::PAYLOAD_TOO_LARGE
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            return (status, Json(serde_json::json!({ "error": message }))).into_response();
+        }
+    };
+    let language = language_form.or(language_header);
+
+    match state.lab.gateway_transcribe(wav, language.as_deref()).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": format!("{error:#}") })),
+        )
+            .into_response(),
+    }
+}
+
+async fn post_gateway_speech(
+    State(state): State<AppState>,
+    Json(request): Json<GatewaySpeechRequest>,
+) -> Response {
+    match state.lab.gateway_speech(request).await {
+        Ok(audio) => {
+            let mut response = Response::new(Body::from(audio.bytes));
+            *response.status_mut() = StatusCode::OK;
+            if let Ok(value) = HeaderValue::from_str(&audio.content_type) {
+                response.headers_mut().insert(header::CONTENT_TYPE, value);
+            }
+            if let Ok(value) = HeaderValue::from_str(&audio.tts_id) {
+                response.headers_mut().insert("x-s2s-tts-id", value);
+            }
+            response
+        }
+        Err(error) => {
+            let message = format!("{error:#}");
+            let status = if message.contains("missing non-empty") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::BAD_GATEWAY
+            };
+            (status, Json(serde_json::json!({ "error": message }))).into_response()
+        }
+    }
+}
+
+async fn extract_wav_and_language(
+    content_type: &str,
+    body: &[u8],
+) -> Result<(Vec<u8>, Option<String>), anyhow::Error> {
+    let ctype = content_type.to_ascii_lowercase();
+    if ctype.contains("multipart/") {
+        let boundary = multer::parse_boundary(content_type)
+            .map_err(|e| anyhow::anyhow!("multipart boundary: {e}"))?;
+        let mut multipart = multer::Multipart::new(
+            futures_util::stream::once(async move {
+                Ok::<_, std::io::Error>(bytes::Bytes::copy_from_slice(body))
+            }),
+            boundary,
+        );
+        let mut file_bytes = None;
+        let mut language = None;
+        while let Some(field) = multipart
+            .next_field()
+            .await
+            .map_err(|e| anyhow::anyhow!("multipart field: {e}"))?
+        {
+            let name = field.name().unwrap_or("").to_string();
+            let field_content_type = field.content_type().map(ToString::to_string);
+            let data = field
+                .bytes()
+                .await
+                .map_err(|e| anyhow::anyhow!("multipart bytes: {e}"))?;
+            match name.as_str() {
+                "file" | "audio" | "data" => {
+                    let Some(field_content_type) = field_content_type else {
+                        return Err(anyhow::anyhow!(
+                            "multipart audio field requires Content-Type audio/wav"
+                        ));
+                    };
+                    if !is_wav_content_type(&field_content_type) {
+                        return Err(anyhow::anyhow!(
+                            "unsupported multipart audio Content-Type {field_content_type}; expected audio/wav"
+                        ));
+                    }
+                    file_bytes = Some(data.to_vec());
+                }
+                "language" | "lang" => {
+                    language = Some(String::from_utf8_lossy(&data).trim().to_string());
+                }
+                _ => {}
+            }
+        }
+        let wav =
+            file_bytes.ok_or_else(|| anyhow::anyhow!("multipart form missing file/audio field"))?;
+        validate_pcm_wav(&wav)?;
+        return Ok((wav, language.filter(|s| !s.is_empty())));
+    }
+
+    if !is_wav_content_type(content_type) {
+        return Err(anyhow::anyhow!(
+            "unsupported Content-Type {content_type}; expected audio/wav or multipart/form-data"
+        ));
+    }
+    if body.is_empty() {
+        return Err(anyhow::anyhow!(
+            "empty body; send multipart file= or raw audio/wav"
+        ));
+    }
+    validate_pcm_wav(body)?;
+    Ok((body.to_vec(), None))
+}
+
+fn is_wav_content_type(value: &str) -> bool {
+    matches!(
+        value
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "audio/wav" | "audio/x-wav"
+    )
+}
+
+fn validate_pcm_wav(bytes: &[u8]) -> Result<()> {
+    if bytes.len() > MAX_ASR_WAV_BYTES {
+        anyhow::bail!("PCM-WAV exceeds 8 MiB");
+    }
+    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        anyhow::bail!("invalid RIFF/WAVE audio");
+    }
+
+    let mut reader =
+        hound::WavReader::new(std::io::Cursor::new(bytes)).context("invalid PCM-WAV structure")?;
+    let spec = reader.spec();
+    if spec.sample_format != hound::SampleFormat::Int {
+        anyhow::bail!("compressed or floating-point WAV is unsupported; expected PCM-WAV");
+    }
+    if spec.channels == 0
+        || spec.sample_rate == 0
+        || !matches!(spec.bits_per_sample, 8 | 16 | 24 | 32)
+    {
+        anyhow::bail!("invalid PCM-WAV format");
+    }
+    if reader.duration() == 0 {
+        anyhow::bail!("PCM-WAV contains no audio samples");
+    }
+    for sample in reader.samples::<i32>() {
+        sample.context("invalid PCM-WAV sample data")?;
+    }
+    Ok(())
+}
+
 async fn get_catalog(State(state): State<AppState>) -> impl IntoResponse {
     Json(state.lab.catalog().await)
+}
+
+async fn get_capability(State(state): State<AppState>) -> impl IntoResponse {
+    Json(state.lab.catalog().await.hardware)
+}
+
+async fn get_suggestions(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let catalog = state.lab.catalog().await;
+    Json(build_gateway_suggestions(&catalog, &params))
+}
+
+#[derive(Debug, Serialize)]
+struct GatewaySuggestedPair {
+    asr_id: String,
+    tts_id: String,
+    asr_name: String,
+    tts_name: String,
+    score: f32,
+    reason: String,
+    vram_gb: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct GatewaySuggestions {
+    capability: HardwareProfile,
+    suggested_pairs: Vec<GatewaySuggestedPair>,
+    scoring: &'static str,
+    note: &'static str,
+}
+
+fn build_gateway_suggestions(
+    catalog: &crate::lab::LabCatalogResponse,
+    params: &HashMap<String, String>,
+) -> GatewaySuggestions {
+    let language = params
+        .get("language")
+        .or_else(|| params.get("lang"))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty() && value != "auto");
+    let stable_only = params
+        .get("stable_only")
+        .or_else(|| params.get("stable"))
+        .map(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
+        .unwrap_or(true);
+    let budget = params
+        .get("max_vram_gb")
+        .or_else(|| params.get("max_vram"))
+        .and_then(|value| value.trim().parse::<f32>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(8.0);
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(8)
+        .clamp(1, 32);
+
+    let eligible = |status: &&crate::registry::CatalogBackendStatus,
+                    stage: crate::registry::BackendStage| {
+        status.backend.stage == stage
+            && status.available
+            && status.selected_variant.as_ref().is_some_and(|variant| {
+                (!stable_only || variant.stable)
+                    && language.as_deref().is_none_or(|wanted| {
+                        status.backend.languages.is_empty()
+                            || status.backend.languages.iter().any(|item| {
+                                let item = item.to_ascii_lowercase();
+                                item == "auto"
+                                    || item == wanted
+                                    || item.starts_with(&format!("{wanted}-"))
+                            })
+                    })
+            })
+    };
+    let asr: Vec<_> = catalog
+        .backends
+        .iter()
+        .filter(|status| eligible(status, crate::registry::BackendStage::Asr))
+        .collect();
+    let tts: Vec<_> = catalog
+        .backends
+        .iter()
+        .filter(|status| eligible(status, crate::registry::BackendStage::Tts))
+        .collect();
+
+    let mut suggested_pairs = Vec::new();
+    for asr_status in asr {
+        for tts_status in &tts {
+            let vram_gb = (asr_status.backend.resources.vram_gb
+                + tts_status.backend.resources.vram_gb)
+                .max(0.0);
+            let installed_bonus = u8::from(asr_status.installed) + u8::from(tts_status.installed);
+            let budget_score = if vram_gb <= budget { 0.25 } else { -0.35 };
+            let score = (0.55 + budget_score + f32::from(installed_bonus) * 0.08).clamp(0.0, 0.99);
+            suggested_pairs.push(GatewaySuggestedPair {
+                asr_id: asr_status.backend.id.clone(),
+                tts_id: tts_status.backend.id.clone(),
+                asr_name: asr_status.backend.name.clone(),
+                tts_name: tts_status.backend.name.clone(),
+                score: (score * 100.0).round() / 100.0,
+                reason: if vram_gb <= budget {
+                    "stable catalog pair within the requested VRAM budget".into()
+                } else {
+                    "stable catalog pair above the requested VRAM budget".into()
+                },
+                vram_gb: (vram_gb * 100.0).round() / 100.0,
+            });
+        }
+    }
+    suggested_pairs.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                left.vram_gb
+                    .partial_cmp(&right.vram_gb)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| left.asr_id.cmp(&right.asr_id))
+            .then_with(|| left.tts_id.cmp(&right.tts_id))
+    });
+    suggested_pairs.truncate(limit);
+
+    GatewaySuggestions {
+        capability: catalog.hardware.clone(),
+        suggested_pairs,
+        scoring: "heuristic_v1",
+        note: "Predictions from catalog metadata and capacity budget; not runtime benchmarks.",
+    }
 }
 
 async fn post_model_download(
@@ -128,8 +485,18 @@ async fn get_stack(State(state): State<AppState>) -> impl IntoResponse {
 async fn put_stack(
     State(state): State<AppState>,
     Json(request): Json<ActivateStackRequest>,
-) -> impl IntoResponse {
-    Json(state.lab.activate(request).await)
+) -> Response {
+    let result = state.lab.activate(request).await;
+    let status = stack_http_status(result.ok);
+    (status, Json(result)).into_response()
+}
+
+fn stack_http_status(ok: bool) -> StatusCode {
+    if ok {
+        StatusCode::OK
+    } else {
+        StatusCode::CONFLICT
+    }
 }
 
 async fn post_benchmark(
@@ -397,5 +764,111 @@ where
     if let Ok(json) = serde_json::to_string(&event) {
         let mut socket = sink.lock().await;
         let _ = socket.send(Message::Text(json.into())).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pcm_wav() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate: 16_000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::new(std::io::Cursor::new(&mut bytes), spec).unwrap();
+            writer.write_sample::<i16>(0).unwrap();
+            writer.write_sample::<i16>(512).unwrap();
+            writer.finalize().unwrap();
+        }
+        bytes
+    }
+
+    #[tokio::test]
+    async fn raw_asr_accepts_only_valid_pcm_wav() {
+        let wav = pcm_wav();
+        let (actual, language) = extract_wav_and_language("audio/wav", &wav).await.unwrap();
+        assert_eq!(actual, wav);
+        assert_eq!(language, None);
+
+        assert!(extract_wav_and_language("audio/webm", &wav).await.is_err());
+        assert!(extract_wav_and_language("audio/wav", b"RIFFbrokenWAVE")
+            .await
+            .is_err());
+        for compressed in [
+            b"ID3compressed-mp3".as_slice(),
+            b"OggScompressed-ogg".as_slice(),
+        ] {
+            assert!(extract_wav_and_language("audio/wav", compressed)
+                .await
+                .is_err());
+        }
+
+        let mut floating = wav;
+        floating[20..22].copy_from_slice(&3_u16.to_le_bytes());
+        assert!(extract_wav_and_language("audio/wav", &floating)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn multipart_asr_checks_part_type_and_language() {
+        let boundary = "aurago-speech-lab-test";
+        let wav = pcm_wav();
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"language\"\r\n\r\nde\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n"
+        )
+        .into_bytes();
+        body.extend_from_slice(&wav);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+        let (actual, language) =
+            extract_wav_and_language(&format!("multipart/form-data; boundary={boundary}"), &body)
+                .await
+                .unwrap();
+        assert_eq!(actual, wav);
+        assert_eq!(language.as_deref(), Some("de"));
+
+        let mut wrong_type = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.webm\"\r\nContent-Type: audio/webm\r\n\r\n"
+        )
+        .into_bytes();
+        wrong_type.extend_from_slice(&wav);
+        wrong_type.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        assert!(extract_wav_and_language(
+            &format!("multipart/form-data; boundary={boundary}"),
+            &wrong_type,
+        )
+        .await
+        .is_err());
+    }
+
+    #[test]
+    fn asr_rejects_oversized_wav() {
+        let mut wav = pcm_wav();
+        wav.resize(MAX_ASR_WAV_BYTES + 1, 0);
+        assert!(validate_pcm_wav(&wav)
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds 8 MiB"));
+    }
+
+    #[test]
+    fn failed_stack_activation_is_http_conflict() {
+        assert_eq!(stack_http_status(true), StatusCode::OK);
+        assert_eq!(stack_http_status(false), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn readiness_uses_service_unavailable_until_both_components_are_ready() {
+        assert_eq!(readiness_http_status(true), StatusCode::OK);
+        assert_eq!(
+            readiness_http_status(false),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 }

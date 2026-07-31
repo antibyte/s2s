@@ -163,3 +163,4 @@ fn print_banner(cfg: &Config, gpu: &gpu::GpuReport) {
         }
     );
 }
+mod gateway;
