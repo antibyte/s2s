@@ -104,7 +104,7 @@ AuraGo `SpeechRecognizer` / `SpeechSynthesizer` call the **fixed** gateway paths
 |-------------|------------------------|
 | WAV → text | `POST /v1/audio/transcriptions` multipart `file` or raw `audio/wav`; valid PCM-WAV only, maximum 8 MiB → `{ "text", "asr_id" }` |
 | Text → PCM/WAV | `POST /v1/audio/speech` JSON `{ "input", "voice", "language", "response_format": "wav" }` → audio + `x-s2s-tts-id`; a non-empty `model` is HTTP `400` and is never forwarded |
-| Pre-answer check | `GET /ready` → `{ "ready", "asr_id", "tts_id", "asr_ok", "tts_ok", "message" }` (`503` unless both active IDs match the runtime, both stages are `idle`/`ready`, and both probes return non-HTML `2xx`) |
+| Pre-answer check | `GET /ready` → `{ "ready", "asr_id", "tts_id", "voice", "asr_ok", "tts_ok", "message" }` from one runtime snapshot (`503` unless both active IDs match the runtime, both stages are `idle`/`ready`, and both probes return non-HTML `2xx`) |
 | Liveness | `GET /health` → `{ "status": "ok" }` |
 
 LLM remains AuraGo. s2s lab pipeline LLM is unused for production telephony.
@@ -153,7 +153,7 @@ speech_lab:
   base_url: "http://s2s-vulkan:8765"
   advanced_ui_url: ""
   language: de
-  voice: M1
+  chat_llm_provider_id: ""
   timeout_seconds: 60
   sip_enabled: false
   chat_input_enabled: false

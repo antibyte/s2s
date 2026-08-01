@@ -60,6 +60,9 @@ pub struct GatewayReady {
     pub ready: bool,
     pub asr_id: String,
     pub tts_id: String,
+    /// Active catalog-validated TTS voice from the same runtime snapshot.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub voice: String,
     pub asr_ok: bool,
     pub tts_ok: bool,
     pub message: String,
@@ -136,6 +139,7 @@ impl LabController {
         let stack = self.status().await;
         let asr_id = stack.runtime.asr.clone();
         let tts_id = stack.runtime.tts.clone();
+        let voice = stack.runtime.voice.clone();
         let language = stack.runtime.language.clone();
 
         let asr_endpoint = stack
@@ -191,6 +195,7 @@ impl LabController {
             ready,
             asr_id,
             tts_id,
+            voice,
             asr_ok,
             tts_ok,
             message,
@@ -512,6 +517,24 @@ mod tests {
         assert!(!stage_is_ready(Some(&active), &transition, "asr-a"));
         transition.phase = crate::lab::TransitionPhase::Ready;
         assert!(!stage_is_ready(Some(&active), &transition, "asr-other"));
+    }
+
+    #[test]
+    fn readiness_serializes_active_voice() {
+        let ready = GatewayReady {
+            ready: true,
+            asr_id: "asr-a".into(),
+            tts_id: "tts-a".into(),
+            voice: "Serena".into(),
+            asr_ok: true,
+            tts_ok: true,
+            message: "ready".into(),
+            language: "de".into(),
+        };
+        let json = serde_json::to_value(ready).unwrap();
+        assert_eq!(json["asr_id"], "asr-a");
+        assert_eq!(json["tts_id"], "tts-a");
+        assert_eq!(json["voice"], "Serena");
     }
 
     #[tokio::test]
