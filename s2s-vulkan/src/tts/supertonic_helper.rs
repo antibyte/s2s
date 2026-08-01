@@ -871,12 +871,12 @@ fn load_supertonic_session(path: &str, provider: SupertonicProvider) -> Result<S
                     .with_dawn_backend_type(DawnBackendType::Vulkan)
                     .build()
                     .error_on_failure();
-                let builder = builder
+                let mut builder = builder
                     .with_execution_providers([provider])
                     .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-                let mut builder = builder
-                    .with_disable_cpu_fallback()
-                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                // Supertonic contains shape/control nodes that WebGPU does not
+                // implement. ONNX Runtime must keep its normal CPU fallback for
+                // those nodes while supported inference nodes stay on WebGPU.
                 Ok(builder.commit_from_file(path)?)
             }
             #[cfg(not(feature = "supertonic-webgpu"))]
