@@ -47,7 +47,7 @@ Linux:
 S2S_LAB_BUILD=1 scripts/prepare_lab.sh intel-sycl
 ```
 
-Open `http://127.0.0.1:8088`. This is the only host-published lab port; the
+Open `http://127.0.0.1:8766`. This is the only host-published lab port; the
 controller remains on the private Compose network. The UI loads compatible choices from
 `GET /api/v1/catalog`, switches through `PUT /api/v1/stack`, displays download,
 health and warmup events, and stores ASR (latency/WER/CER), LLM
@@ -387,7 +387,7 @@ Catalog id: `vibevoice-realtime-0.5b` —
 (Microsoft VibeVoice-Realtime-0.5B, MIT).
 
 - Low-latency streaming TTS served by **CrispASR** (`--backend vibevoice-tts`).
-- OpenAI-compatible `POST /v1/audio/speech` on port **8089** (not 8088 — that is the web UI).
+- OpenAI-compatible `POST /v1/audio/speech` on port **8089** (not 8766 — that is the web UI).
 - Q4_K talker (~700 MB) + preset voice packs (EN/DE/FR/ES/…); default voice `emma`.
 - Lab: download the model, build/start the sidecar, switch TTS to **VibeVoice Realtime 0.5B**.
 
@@ -490,7 +490,7 @@ From another PC: open `https://<this-machine-ip>:9999`, accept the certificate w
 
 ```bash
 docker compose --profile web up -d --build
-# UI:  http://localhost:8088
+# UI:  http://localhost:8766
 # WS:  same origin /ws  →  proxied to s2s:8765
 ```
 
@@ -501,12 +501,12 @@ gateway:
 ```bash
 cd web
 python serve.py --host 0.0.0.0 --port 9999 \
-  --backend 127.0.0.1:8088 --backend-ws-path /ws
+  --backend 127.0.0.1:8766 --backend-ws-path /ws
 ```
 
 Also included in `--profile full`.
 
-Env: `WEB_PORT=8088`.
+Env: `WEB_PORT=8766`.
 
 > The Compose default is `--mode lab`, which includes binary PCM WebSocket
 > transport and the controller API.
