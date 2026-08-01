@@ -2021,13 +2021,51 @@ impl LabController {
     }
 
     async fn stage_already_active(&self, stage: BackendStage, backend_id: &str) -> bool {
-        let state = self.state.read().await;
-        let active = match stage {
-            BackendStage::Asr => state.asr.as_ref(),
-            BackendStage::Tts => state.tts.as_ref(),
-            BackendStage::Llm => state.llm.as_ref(),
+        let active = {
+            let state = self.state.read().await;
+            match stage {
+                BackendStage::Asr => state.asr.clone(),
+                BackendStage::Tts => state.tts.clone(),
+                BackendStage::Llm => state.llm.clone(),
+            }
         };
-        active.is_some_and(|active| active.backend_id == backend_id)
+        let Some(active) = active.filter(|active| active.backend_id == backend_id) else {
+            return false;
+        };
+        let Some(variant) = self.catalog.find(backend_id).and_then(|backend| {
+            backend
+                .variants
+                .iter()
+                .find(|variant| variant.id == active.variant_id)
+        }) else {
+            return false;
+        };
+
+        if !variant.host_profile.is_empty() {
+            return self
+                .host_runtime
+                .status()
+                .await
+                .ok()
+                .flatten()
+                .filter(HostAgentStatus::fresh)
+                .is_some_and(|status| {
+                    status.processes.iter().any(|process| {
+                        process.stage == stage_label(stage)
+                            && process.backend_id == backend_id
+                            && process.variant_id == active.variant_id
+                            && process.state == "running"
+                    })
+                });
+        }
+        if self.docker_control_enabled && !active.container.is_empty() {
+            return self
+                .control
+                .running(&active.container)
+                .await
+                .unwrap_or(false);
+        }
+        true
     }
 
     fn stage_endpoint(&self, backend: &BackendDefinition, variant: &BackendVariant) -> String {
@@ -4066,6 +4104,43 @@ mod tests {
             control.running.lock().await.clone(),
             HashSet::from(["asr-b".to_string()])
         );
+    }
+
+    #[tokio::test]
+    async fn reselecting_stopped_active_container_restarts_it() {
+        let runtime = runtime::runtime_from(test_config());
+        runtime.write().await.asr_id = "asr-a".into();
+        let control = Arc::new(FakeControl::default());
+        let lab = LabController::with_control(
+            switch_catalog(),
+            cpu_hardware(),
+            runtime,
+            control.clone(),
+            true,
+        )
+        .unwrap();
+        lab.state.write().await.asr = Some(ActiveBackend {
+            backend_id: "asr-a".into(),
+            variant_id: "asr-a-cpu".into(),
+            accelerator: "cpu".into(),
+            endpoint: String::new(),
+            container: "asr-a".into(),
+        });
+
+        let result = lab
+            .activate(ActivateStackRequest {
+                asr_id: Some("asr-a".into()),
+                ..ActivateStackRequest::default()
+            })
+            .await;
+
+        assert!(result.ok, "{}", result.message);
+        assert!(control.running.lock().await.contains("asr-a"));
+        assert!(control
+            .actions
+            .lock()
+            .await
+            .contains(&"start:asr-a".to_string()));
     }
 
     #[tokio::test]

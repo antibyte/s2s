@@ -185,8 +185,16 @@ function Write-JsonAtomic {
     )
     $json = $Value | ConvertTo-Json -Depth 12 -Compress
     $temp = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
-    [IO.File]::WriteAllText($temp, $json, [Text.UTF8Encoding]::new($false))
-    Move-Item -LiteralPath $temp -Destination $Path -Force
+    try {
+        [IO.File]::WriteAllText($temp, $json, [Text.UTF8Encoding]::new($false))
+        # Move-Item -Force cannot replace an existing file reliably on Windows.
+        # PowerShell 7 runs on modern .NET, whose overwrite overload keeps the
+        # same-volume replacement atomic for readers of the status/result file.
+        [IO.File]::Move($temp, $Path, $true)
+    }
+    finally {
+        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Get-UnixTime {
