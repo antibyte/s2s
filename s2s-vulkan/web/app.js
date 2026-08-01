@@ -128,7 +128,7 @@ const els = {
 /** @typedef {{ cpu: number, gpu: number, vram: number }} ResourceStars */
 /** @typedef {{ show: boolean, cpu: boolean, nvidia: boolean, intel: boolean, amd: boolean, vulkan: boolean }} GpuSupport */
 /** @typedef {{ id: string, label: string }} LanguageLabel */
-/** @typedef {{ id: string, stage: string, name: string, tag: string, desc: string, vramGb: number, stars: ResourceStars, gpuSupport: GpuSupport, languageLabels: LanguageLabel[], meta: string, available?: boolean, installed: boolean, bundled: boolean, downloadState: string, downloadSizeBytes: number, downloadedBytes: number, deletable: boolean, downloadError: string, defaultVoice: string, voices: string[], env?: Record<string,string>, note?: string }} EngineOpt */
+/** @typedef {{ id: string, stage: string, name: string, tag: string, desc: string, vramGb: number, stars: ResourceStars, gpuSupport: GpuSupport, languageLabels: LanguageLabel[], meta: string, available?: boolean, installed: boolean, bundled: boolean, downloadState: string, downloadSizeBytes: number, downloadedBytes: number, deletable: boolean, downloadError: string, defaultVoice: string, voices: string[], voiceMode: "request"|"restart"|"fixed", env?: Record<string,string>, note?: string }} EngineOpt */
 
 /** Model choices and presets are populated exclusively from /api/v1/catalog. */
 /** @type {EngineOpt[]} */
@@ -373,6 +373,9 @@ function catalogOption(entry) {
     downloadError: entry.download_error || "",
     defaultVoice: entry.default_voice || "",
     voices: Array.isArray(entry.voices) ? entry.voices.filter(Boolean) : [],
+    voiceMode: ["request", "restart", "fixed"].includes(entry.voice_mode)
+      ? entry.voice_mode
+      : "fixed",
     hostManaged,
     runtimeState,
     runtimeReason,
@@ -766,6 +769,7 @@ function clearSwapBusy() {
 }
 
 async function sendStackToBackend({ voiceOnly = false } = {}) {
+  const activeTts = findOpt(TTS_OPTIONS, lab.tts);
   const payload = voiceOnly
     ? { voice: lab.voice }
     : {
@@ -780,8 +784,8 @@ async function sendStackToBackend({ voiceOnly = false } = {}) {
       : `Hot-swap → asr=${lab.asr} tts=${lab.tts} llm=${lab.llm} voice=${lab.voice}`
   );
   setHint(copy.hintStackSwap, { sticky: true });
-  // Voice-only: keep picker enabled so the user can change again immediately.
-  setSwapBusy(true, { lockVoice: !voiceOnly });
+  // Restart-backed voices lock the picker while their sidecar is replaced.
+  setSwapBusy(true, { lockVoice: !voiceOnly || activeTts?.voiceMode === "restart" });
   try {
     const response = await fetch("/api/v1/stack", {
       method: "PUT",
@@ -1168,7 +1172,11 @@ function renderVoicePicker(tts) {
   // Never leave the control disabled from stale swap state after re-render.
   els.voiceSelect.disabled = false;
   if (els.voiceHint) {
-    els.voiceHint.textContent = `${voices.length} Stimmen für ${tts?.name || "TTS"}. Die Auswahl gilt ab der nächsten Ausgabe.`;
+    const behavior =
+      tts?.voiceMode === "restart"
+        ? "Der TTS-Sidecar wird beim Wechsel kontrolliert neu gestartet."
+        : "Die Auswahl gilt ab der nächsten Ausgabe.";
+    els.voiceHint.textContent = `${voices.length} Stimmen für ${tts?.name || "TTS"}. ${behavior}`;
   }
 }
 

@@ -29,8 +29,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Script:SchemaVersion = 1
-$Script:AgentVersion = "2.0.0"
+$Script:SchemaVersion = 2
+$Script:AgentVersion = "2.1.0"
 $Script:Root = Split-Path -Parent $PSScriptRoot
 $Script:AllowedStages = @("asr", "tts", "llm")
 $Script:AllowedDockerContainers = @(
@@ -154,7 +154,14 @@ $Script:Profiles = @{
         -Executable $Script:CrispAsrExe `
         -BackendIds @("vibevoice-realtime-0.5b") `
         -VariantIds @("vibevoice-realtime-0.5b-vulkan-windows-b580")
-    "llama-granite" = New-Profile `
+    "crispasr-piper" = New-Profile `
+        -Name "crispasr-piper" -Stage "tts" -Port 8092 `
+        -Executable $Script:CrispAsrExe `
+        -BackendIds @("piper") `
+        -VariantIds @(
+            "piper-host-cpu",
+            "piper-vulkan-windows-b580"
+        )    "llama-granite" = New-Profile `
         -Name "llama-granite" -Stage "llm" -Port 8081 `
         -Executable $Script:LlamaExe `
         -BackendIds @("local-fallback") `
@@ -437,7 +444,22 @@ function Get-LaunchSpec {
                 environment = @{}
             }
         }
-        "llama-granite" {
+        "crispasr-piper" {
+            # The allowlisted GGUF is the effective voice; arbitrary model paths are forbidden.
+            $model = switch ([string]$Command.voice) {
+                "thorsten" { Resolve-ModelPath "piper\piper-de_DE-thorsten-medium-f16.gguf" }
+                "libritts" { Resolve-ModelPath "piper\piper-en_US-libritts_r-medium-f16.gguf" }
+                default { throw "Piper voice '$($Command.voice)' is not allowlisted" }
+            }
+            $args = @(
+                "--server", "--backend", "piper", "-m", $model, "-l", "auto",
+                "--host", "127.0.0.1", "--port", "$($Profile.port)"
+            )
+            if ([string]$Command.variant_id -like "*-vulkan-*") {
+                $args += @("--gpu-backend", "vulkan", "-dev", "$VulkanDevice")
+            }
+            return [pscustomobject]@{ arguments = $args; environment = @{} }
+        }        "llama-granite" {
             $model = Resolve-ModelPath "granite\granite-3.3-2b-instruct-q4_k_m.gguf"
             return [pscustomobject]@{
                 arguments = @(
@@ -553,6 +575,7 @@ function Start-AllowlistedProfile {
         state = "starting"
         pid = [int]$process.Id
         endpoint = [string]$Command.endpoint
+        voice = [string]$Command.voice
         executable = [string]$Profile.executable
         stdout = $stdout
         stderr = $stderr
@@ -570,7 +593,7 @@ function Assert-Command {
         [Parameter(Mandatory = $true)][string]$FileStem
     )
     if ([int]$Command.schema_version -ne $Script:SchemaVersion) {
-        throw "unsupported schema_version '$($Command.schema_version)'"
+        throw "unsupported host-agent schema_version '$($Command.schema_version)'; expected 2, restart the updated host agent"
     }
     $requestId = [guid]::Empty
     if (-not [guid]::TryParse([string]$Command.request_id, [ref]$requestId)) {
@@ -585,7 +608,14 @@ function Assert-Command {
     if ([string]$Command.action -eq "stop_all") {
         return $null
     }
-    if ($Script:AllowedStages -notcontains [string]$Command.stage) {
+    $voice = [string]$Command.voice
+    if ($voice.Length -gt 128 -or $voice -match '[\x00-\x1f\x7f]') {
+        throw "voice contains invalid characters"
+    }
+    if ([string]$Command.stage -eq "tts" -and [string]$Command.backend_id -eq "piper" -and
+        @("thorsten", "libritts") -notcontains $voice) {
+        throw "Piper voice '$voice' is not allowlisted"
+    }    if ($Script:AllowedStages -notcontains [string]$Command.stage) {
         throw "stage '$($Command.stage)' is not allowlisted"
     }
     if (-not $Script:Profiles.ContainsKey([string]$Command.host_profile)) {
@@ -744,6 +774,7 @@ function Write-Heartbeat {
             state = [string]$entry.state
             pid = [int]$entry.pid
             endpoint = [string]$entry.endpoint
+            voice = [string]$entry.voice
         }
     }
     $status = [ordered]@{

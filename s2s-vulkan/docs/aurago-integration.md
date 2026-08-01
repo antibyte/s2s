@@ -103,8 +103,8 @@ AuraGo `SpeechRecognizer` / `SpeechSynthesizer` call the **fixed** gateway paths
 | AuraGo need | s2s contract |
 |-------------|------------------------|
 | WAV → text | `POST /v1/audio/transcriptions` multipart `file` or raw `audio/wav`; valid PCM-WAV only, maximum 8 MiB → `{ "text", "asr_id" }` |
-| Text → PCM/WAV | `POST /v1/audio/speech` JSON `{ "input", "voice", "language", "response_format": "wav" }` → audio + `x-s2s-tts-id`; a non-empty `model` is HTTP `400` and is never forwarded |
-| Pre-answer check | `GET /ready` → `{ "ready", "asr_id", "tts_id", "voice", "asr_ok", "tts_ok", "message" }` from one runtime snapshot (`503` unless both active IDs match the runtime, both stages are `idle`/`ready`, and both probes return non-HTML `2xx`) |
+| Text → PCM/WAV | `POST /v1/audio/speech` JSON `{ "input", "voice", "language", "response_format": "wav" }` → audio + `x-s2s-tts-id` + `x-s2s-voice`; a non-empty `model` is HTTP `400` and is never forwarded |
+| Pre-answer check | `GET /ready` → `{ "ready", "asr_id", "tts_id", "voice", "asr_ok", "tts_ok", "message" }` from one runtime snapshot (`503` unless both active IDs match the runtime, both stages are `idle`/`ready`, both probes return non-HTML `2xx`, and restart-backed voice state matches the host process) |
 | Liveness | `GET /health` → `{ "status": "ok" }` |
 
 LLM remains AuraGo. s2s lab pipeline LLM is unused for production telephony.
@@ -116,6 +116,17 @@ before reading and chunked responses are stopped as soon as the limit is
 exceeded. A transition in `warming`, `rollback`, or `failed` (and any other
 non-terminal phase) is not ready; HTTP `404` is never treated as a successful
 readiness probe.
+
+Every TTS catalog entry declares `voice_mode`. `request` voices may be selected
+per synthesis request, `restart` voices are part of the loaded sidecar identity,
+and `fixed` backends accept only their active default. A missing field in an
+external catalog defaults to `fixed`. Requesting a different voice from a
+`restart` or `fixed` backend returns HTTP `409` with
+`code: "voice_not_active"`; the gateway never substitutes another speaker.
+Piper is restart-backed and the Windows host agent accepts only the catalog
+IDs `thorsten` and `libritts`. Host command/status schema 2 carries the loaded
+voice; after an upgrade the host agent must be restarted before readiness can
+become true.
 
 ## Production env hints
 

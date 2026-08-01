@@ -88,6 +88,14 @@ pub struct BackendVariant {
     pub host_profile: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceMode {
+    Request,
+    Restart,
+    #[default]
+    Fixed,
+}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BackendDefinition {
     pub id: String,
@@ -104,6 +112,10 @@ pub struct BackendDefinition {
     pub default_voice: String,
     #[serde(default)]
     pub voices: Vec<String>,
+    /// How callers may select a TTS voice. Missing metadata fails closed to
+    /// `fixed` so external legacy catalogs never claim unsupported switching.
+    #[serde(default)]
+    pub voice_mode: VoiceMode,
     #[serde(default)]
     pub native_sample_rate: u32,
     #[serde(default)]
@@ -246,6 +258,45 @@ impl BackendCatalog {
             }
             if backend.variants.is_empty() {
                 bail!("backend '{}' has no variants", backend.id);
+            }
+            if backend.stage == BackendStage::Tts {
+                let default_voice = backend.default_voice.trim();
+                if default_voice.is_empty() {
+                    bail!("TTS backend '{}' has no default_voice", backend.id);
+                }
+                let mut voices = HashSet::new();
+                for voice in &backend.voices {
+                    let trimmed = voice.trim();
+                    if trimmed.is_empty()
+                        || trimmed.chars().any(char::is_control)
+                        || !voices.insert(trimmed.to_ascii_lowercase())
+                    {
+                        bail!(
+                            "TTS backend '{}' has an invalid or duplicate voice",
+                            backend.id
+                        );
+                    }
+                }
+                if !backend.voices.is_empty()
+                    && !backend
+                        .voices
+                        .iter()
+                        .any(|voice| voice.eq_ignore_ascii_case(default_voice))
+                {
+                    bail!(
+                        "TTS backend '{}' default_voice '{}' is not listed in voices",
+                        backend.id,
+                        backend.default_voice
+                    );
+                }
+                if matches!(backend.voice_mode, VoiceMode::Request | VoiceMode::Restart)
+                    && backend.voices.is_empty()
+                {
+                    bail!(
+                        "TTS backend '{}' voice_mode requires at least one catalog voice",
+                        backend.id
+                    );
+                }
             }
             if !backend.bundled
                 && backend.artifacts.is_empty()
@@ -717,8 +768,60 @@ mod tests {
         assert_eq!(backend.voices.len(), 9);
         assert!(backend.voices.iter().any(|voice| voice == "Serena"));
         assert!(backend.voices.iter().any(|voice| voice == "Dylan"));
+        assert_eq!(backend.voice_mode, VoiceMode::Request);
     }
 
+    #[test]
+    fn embedded_catalog_declares_truthful_tts_voice_modes() {
+        let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        for id in [
+            "qwen3-tts-0.6b",
+            "vibevoice-realtime-0.5b",
+            "higgs-tts-3-4b",
+        ] {
+            assert_eq!(
+                catalog.find(id).unwrap().voice_mode,
+                VoiceMode::Request,
+                "{id}"
+            );
+        }
+        for id in ["supertonic", "kokoro"] {
+            let backend = catalog.find(id).unwrap();
+            assert_eq!(backend.voice_mode, VoiceMode::Fixed, "{id}");
+            assert!(!backend.default_voice.trim().is_empty(), "{id}");
+        }
+    }
+
+    #[test]
+    fn missing_voice_mode_defaults_to_fixed_and_blank_tts_voice_is_rejected() {
+        let mut value: serde_json::Value = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let backend = value["backends"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|backend| backend["id"] == "qwen3-tts-0.6b")
+            .unwrap();
+        backend.as_object_mut().unwrap().remove("voice_mode");
+        let catalog: BackendCatalog = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            catalog.find("qwen3-tts-0.6b").unwrap().voice_mode,
+            VoiceMode::Fixed
+        );
+
+        let backend = value["backends"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|backend| backend["id"] == "qwen3-tts-0.6b")
+            .unwrap();
+        backend["default_voice"] = serde_json::Value::String(String::new());
+        let catalog: BackendCatalog = serde_json::from_value(value).unwrap();
+        assert!(catalog
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("default_voice"));
+    }
     #[test]
     fn higgs_catalog_exposes_cuda_and_host_variants() {
         let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();

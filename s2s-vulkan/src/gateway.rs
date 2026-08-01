@@ -5,6 +5,7 @@
 
 use crate::config::Config;
 use crate::lab::{stage_is_ready, LabController};
+use crate::registry::VoiceMode;
 use crate::stt;
 use crate::tts::{apply_preloaded_voice_policy, http_is_qwen_public, iso_tts_language};
 use anyhow::{anyhow, Context, Result};
@@ -12,6 +13,41 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
+
+#[derive(Debug)]
+pub struct GatewayVoiceNotActive {
+    pub requested: String,
+    pub active: String,
+}
+
+impl std::fmt::Display for GatewayVoiceNotActive {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "voice '{}' is not active; active voice is '{}'",
+            self.requested, self.active
+        )
+    }
+}
+
+impl std::error::Error for GatewayVoiceNotActive {}
+
+fn enforce_active_voice(
+    mode: VoiceMode,
+    active_voice: &str,
+    requested_voice: Option<&str>,
+) -> Result<()> {
+    if mode != VoiceMode::Request
+        && requested_voice.is_some_and(|voice| !voice.eq_ignore_ascii_case(active_voice))
+    {
+        return Err(GatewayVoiceNotActive {
+            requested: requested_voice.unwrap_or_default().to_string(),
+            active: active_voice.to_string(),
+        }
+        .into());
+    }
+    Ok(())
+}
 
 /// Responses from gateway upstreams are bounded independently of the request
 /// body. JSON/error responses must stay small while synthesized audio gets a
@@ -126,6 +162,7 @@ pub struct GatewayAudio {
     pub bytes: Vec<u8>,
     pub content_type: String,
     pub tts_id: String,
+    pub voice: String,
 }
 
 impl LabController {
@@ -158,7 +195,9 @@ impl LabController {
         let asr_stable = stage_is_ready(stack.asr.as_ref(), &stack.asr_transition, &asr_id);
         let tts_stable = stage_is_ready(stack.tts.as_ref(), &stack.tts_transition, &tts_id);
         let asr_ok = asr_stable && probe_service(&self.client, &asr_endpoint, true).await;
-        let tts_ok = tts_stable && probe_service(&self.client, &tts_endpoint, false).await;
+        let tts_reachable = tts_stable && probe_service(&self.client, &tts_endpoint, false).await;
+        let voice_ok = tts_reachable && self.tts_voice_loaded(&tts_id, &voice).await;
+        let tts_ok = tts_reachable && voice_ok;
         let ready = asr_ok && tts_ok;
         let message = if ready {
             format!("ready · asr={asr_id} tts={tts_id}")
@@ -181,8 +220,10 @@ impl LabController {
                     &stack.tts_transition,
                     &tts_id,
                 ));
-            } else if !tts_ok {
+            } else if !tts_reachable {
                 parts.push(format!("tts '{tts_id}' unreachable"));
+            } else if !voice_ok {
+                parts.push(format!("tts voice '{voice}' is not loaded"));
             }
             if parts.is_empty() {
                 "not ready".into()
@@ -266,12 +307,19 @@ impl LabController {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or("wav");
-        let voice = request
+        let requested_voice = request
             .voice
             .as_deref()
             .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(cfg.supertonic_voice.as_str());
+            .filter(|s| !s.is_empty());
+        let active_voice = cfg.supertonic_voice.trim();
+        let voice_mode = self.tts_voice_mode(&tts_id).unwrap_or(VoiceMode::Fixed);
+        enforce_active_voice(voice_mode, active_voice, requested_voice)?;
+        let voice = if let Some(voice) = requested_voice {
+            self.resolve_tts_voice(&tts_id, voice)?
+        } else {
+            self.resolve_tts_voice(&tts_id, active_voice)?
+        };
         // The active stack is authoritative. A caller-provided model is
         // rejected above and can never override or leak to the sidecar.
         let model = if cfg.tts_model.trim().is_empty() {
@@ -284,7 +332,7 @@ impl LabController {
             "model": model,
             "input": text,
             "language": http_lang,
-            "voice": voice,
+            "voice": &voice,
             "response_format": fmt,
         });
         apply_preloaded_voice_policy(&mut body, model);
@@ -339,6 +387,7 @@ impl LabController {
             bytes,
             content_type,
             tts_id,
+            voice,
         })
     }
 }
@@ -535,6 +584,20 @@ mod tests {
         assert_eq!(json["asr_id"], "asr-a");
         assert_eq!(json["tts_id"], "tts-a");
         assert_eq!(json["voice"], "Serena");
+    }
+
+    #[test]
+    fn fixed_and_restart_voices_fail_closed_on_drift() {
+        for mode in [VoiceMode::Fixed, VoiceMode::Restart] {
+            let error = enforce_active_voice(mode, "thorsten", Some("libritts")).unwrap_err();
+            let voice_error = error.downcast_ref::<GatewayVoiceNotActive>().unwrap();
+            assert_eq!(voice_error.requested, "libritts");
+            assert_eq!(voice_error.active, "thorsten");
+        }
+
+        enforce_active_voice(VoiceMode::Request, "Serena", Some("Ryan")).unwrap();
+        enforce_active_voice(VoiceMode::Fixed, "default", Some("DEFAULT")).unwrap();
+        enforce_active_voice(VoiceMode::Restart, "thorsten", None).unwrap();
     }
 
     #[tokio::test]

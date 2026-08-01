@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
-const HOST_SCHEMA_VERSION: u32 = 1;
+const HOST_SCHEMA_VERSION: u32 = 2;
 const HEARTBEAT_MAX_AGE_SECS: u64 = 20;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -31,6 +31,8 @@ pub struct HostProcessStatus {
     pub pid: u32,
     #[serde(default)]
     pub endpoint: String,
+    #[serde(default)]
+    pub voice: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -103,6 +105,7 @@ struct HostCommand {
     variant_id: String,
     host_profile: String,
     endpoint: String,
+    voice: String,
     created_at_unix: u64,
 }
 
@@ -159,8 +162,9 @@ impl HostRuntimeClient {
         backend_id: &str,
         variant: &BackendVariant,
         endpoint: &str,
+        voice: &str,
     ) -> Result<u32> {
-        self.execute("start", stage, backend_id, variant, endpoint)
+        self.execute("start", stage, backend_id, variant, endpoint, voice)
             .await
     }
 
@@ -171,7 +175,7 @@ impl HostRuntimeClient {
         variant: &BackendVariant,
         endpoint: &str,
     ) -> Result<()> {
-        self.execute("stop", stage, backend_id, variant, endpoint)
+        self.execute("stop", stage, backend_id, variant, endpoint, "")
             .await
             .map(|_| ())
     }
@@ -201,6 +205,7 @@ impl HostRuntimeClient {
             "all-host-runtimes",
             &placeholder,
             "",
+            "",
         )
         .await
         .map(|_| ())
@@ -213,6 +218,7 @@ impl HostRuntimeClient {
         backend_id: &str,
         variant: &BackendVariant,
         endpoint: &str,
+        voice: &str,
     ) -> Result<u32> {
         if action != "stop_all" {
             if variant.host_profile.is_empty() {
@@ -222,6 +228,13 @@ impl HostRuntimeClient {
                 .status()
                 .await?
                 .ok_or_else(|| anyhow!("Windows host agent is not running"))?;
+            if status.schema_version != HOST_SCHEMA_VERSION {
+                return Err(anyhow!(
+                    "Windows host agent schema {} is incompatible with required schema {}; restart host_idle_agent.ps1 from the updated checkout",
+                    status.schema_version,
+                    HOST_SCHEMA_VERSION
+                ));
+            }
             if !status.fresh() {
                 return Err(anyhow!("Windows host agent heartbeat is stale"));
             }
@@ -243,6 +256,7 @@ impl HostRuntimeClient {
             variant_id: variant.id.clone(),
             host_profile: variant.host_profile.clone(),
             endpoint: endpoint.into(),
+            voice: voice.trim().into(),
             created_at_unix: unix_time(),
         };
         let commands = self.root.join("host-agent").join("commands");
@@ -328,7 +342,7 @@ mod tests {
     #[test]
     fn stale_heartbeat_is_not_accepted() {
         let status = HostAgentStatus {
-            schema_version: 1,
+            schema_version: HOST_SCHEMA_VERSION,
             updated_at_unix: unix_time().saturating_sub(21),
             ..Default::default()
         };
@@ -338,7 +352,7 @@ mod tests {
     #[test]
     fn fresh_heartbeat_exposes_allowlisted_profile() {
         let status = HostAgentStatus {
-            schema_version: 1,
+            schema_version: HOST_SCHEMA_VERSION,
             updated_at_unix: unix_time(),
             profiles: vec!["crispasr-whisper".into()],
             ..Default::default()
@@ -348,8 +362,30 @@ mod tests {
         assert!(!status.profile_available("powershell"));
     }
 
+    #[test]
+    fn previous_host_schema_is_not_accepted() {
+        let status = HostAgentStatus {
+            schema_version: HOST_SCHEMA_VERSION - 1,
+            updated_at_unix: unix_time(),
+            ..Default::default()
+        };
+        assert!(!status.fresh());
+    }
+
+    #[test]
+    fn piper_launcher_allowlists_both_catalog_voices() {
+        let script = include_str!("../scripts/host_idle_agent.ps1");
+        assert!(script.contains(
+            "\"thorsten\" { Resolve-ModelPath \"piper\\piper-de_DE-thorsten-medium-f16.gguf\" }"
+        ));
+        assert!(script.contains(
+            "\"libritts\" { Resolve-ModelPath \"piper\\piper-en_US-libritts_r-medium-f16.gguf\" }"
+        ));
+        assert!(script.contains("Piper voice '$($Command.voice)' is not allowlisted"));
+    }
+
     #[tokio::test]
-    async fn start_uses_uuid_command_and_matching_result() {
+    async fn start_uses_uuid_command_and_carries_tts_voice() {
         let root = std::env::temp_dir().join(format!("s2s-host-runtime-{}", Uuid::new_v4()));
         let agent_root = root.join("host-agent");
         let commands = agent_root.join("commands");
@@ -357,11 +393,11 @@ mod tests {
         tokio::fs::create_dir_all(&commands).await.unwrap();
         tokio::fs::create_dir_all(&results).await.unwrap();
         let status = HostAgentStatus {
-            schema_version: 1,
+            schema_version: HOST_SCHEMA_VERSION,
             updated_at_unix: unix_time(),
             platform: "windows".into(),
             accelerators: vec!["vulkan".into()],
-            profiles: vec!["crispasr-whisper".into()],
+            profiles: vec!["crispasr-piper".into()],
             ..Default::default()
         };
         tokio::fs::write(
@@ -380,12 +416,13 @@ mod tests {
                         serde_json::from_slice(&tokio::fs::read(entry.path()).await.unwrap())
                             .unwrap();
                     assert_eq!(command["action"], "start");
-                    assert_eq!(command["host_profile"], "crispasr-whisper");
-                    assert_eq!(command["backend_id"], "fw-base");
+                    assert_eq!(command["host_profile"], "crispasr-piper");
+                    assert_eq!(command["backend_id"], "piper");
+                    assert_eq!(command["voice"], "libritts");
                     let request_id = command["request_id"].as_str().unwrap();
                     Uuid::parse_str(request_id).unwrap();
                     let result = serde_json::json!({
-                        "schema_version": 1,
+                        "schema_version": HOST_SCHEMA_VERSION,
                         "request_id": request_id,
                         "state": "starting",
                         "pid": 4242,
@@ -405,7 +442,7 @@ mod tests {
         });
 
         let variant = BackendVariant {
-            id: "fw-base-vulkan-windows-b580".into(),
+            id: "piper-vulkan-windows-b580".into(),
             accelerator: "vulkan".into(),
             vendors: vec!["intel".into()],
             platforms: vec!["windows".into()],
@@ -420,15 +457,16 @@ mod tests {
             artifacts: Vec::new(),
             bundled: Some(false),
             protocol: "whisper-cpp".into(),
-            host_profile: "crispasr-whisper".into(),
+            host_profile: "crispasr-piper".into(),
         };
         let client = HostRuntimeClient::new(root.clone());
         let pid = client
             .start(
-                BackendStage::Asr,
-                "fw-base",
+                BackendStage::Tts,
+                "piper",
                 &variant,
-                "http://host.docker.internal:8082",
+                "http://host.docker.internal:8092/v1/audio/speech",
+                "libritts",
             )
             .await
             .unwrap();
@@ -464,6 +502,7 @@ mod tests {
                 "supertonic",
                 &variant,
                 "http://host.docker.internal:8085/v1/audio/speech",
+                "M1",
             )
             .await
             .unwrap_err();

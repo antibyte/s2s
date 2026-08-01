@@ -806,6 +806,7 @@
       "protocol": "openai-tts",
       "model": "supertonic",
       "default_voice": "M1",
+      "voice_mode": "fixed",
       "native_sample_rate": 44100,
       "languages": [
         "de",
@@ -917,6 +918,7 @@
       "protocol": "openai-tts-pcm",
       "model": "qwen3-tts-sycl",
       "default_voice": "Aiden",
+      "voice_mode": "request",
       "voices": [
         "Aiden",
         "Serena",
@@ -1113,6 +1115,7 @@
       "protocol": "openai-tts",
       "model": "kokoro",
       "default_voice": "af_bella",
+      "voice_mode": "fixed",
       "native_sample_rate": 24000,
       "languages": [
         "en"
@@ -1207,6 +1210,7 @@
       "protocol": "openai-tts",
       "model": "vibevoice-realtime-0.5b",
       "default_voice": "emma",
+      "voice_mode": "request",
       "voices": [
         "emma",
         "en-Emma_woman",
@@ -1537,6 +1541,7 @@
       "protocol": "openai-tts",
       "model": "bosonai/higgs-tts-3-4b",
       "default_voice": "default",
+      "voice_mode": "request",
       "voices": [
         "default"
       ],

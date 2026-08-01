@@ -3,7 +3,7 @@
 use crate::audio::pcm::i16_to_bytes_le;
 use crate::benchmark::{BenchmarkRating, BenchmarkRequest, BenchmarkService};
 use crate::config::Config;
-use crate::gateway::GatewaySpeechRequest;
+use crate::gateway::{GatewaySpeechRequest, GatewayVoiceNotActive};
 use crate::gpu::GpuReport;
 use crate::lab::{ActivateStackRequest, LabController};
 use crate::messages::{Control, PipelineEvent, QueueItem};
@@ -182,10 +182,24 @@ async fn post_gateway_speech(
             if let Ok(value) = HeaderValue::from_str(&audio.tts_id) {
                 response.headers_mut().insert("x-s2s-tts-id", value);
             }
+            if let Ok(value) = HeaderValue::from_str(&audio.voice) {
+                response.headers_mut().insert("x-s2s-voice", value);
+            }
             response
         }
         Err(error) => {
             let message = format!("{error:#}");
+            if let Some(voice_error) = error.downcast_ref::<GatewayVoiceNotActive>() {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "code": "voice_not_active",
+                        "error": message,
+                        "active_voice": voice_error.active,
+                    })),
+                )
+                    .into_response();
+            }
             (
                 StatusCode::BAD_GATEWAY,
                 Json(serde_json::json!({ "error": message })),

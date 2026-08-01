@@ -5,11 +5,11 @@
 
 use crate::audio::pcm::encode_wav_f32;
 use crate::config::TtsBackend;
-use crate::host_runtime::HostRuntimeClient;
+use crate::host_runtime::{HostAgentStatus, HostRuntimeClient};
 use crate::registry::{
     endpoint_for, resolve_variant, variant_artifacts, variant_bundled, variant_protocol,
     BackendCatalog, BackendDefinition, BackendStage, BackendVariant, CatalogBackendStatus,
-    HardwareProfile, StackPreset,
+    HardwareProfile, StackPreset, VoiceMode,
 };
 use crate::runtime::{self, SharedRuntime, StackStatus};
 use anyhow::{anyhow, Context, Result};
@@ -1067,8 +1067,19 @@ impl LabController {
             if variant.host_profile.is_empty() {
                 continue;
             }
+            let active_voice = if backend.stage == BackendStage::Tts {
+                self.runtime.read().await.cfg.supertonic_voice.clone()
+            } else {
+                String::new()
+            };
             self.host_runtime
-                .start(backend.stage, &active.backend_id, variant, &active.endpoint)
+                .start(
+                    backend.stage,
+                    &active.backend_id,
+                    variant,
+                    &active.endpoint,
+                    &active_voice,
+                )
                 .await
                 .with_context(|| format!("reload host backend {}", active.backend_id))?;
             self.wait_for_health(backend, variant, &active.endpoint)
@@ -1448,7 +1459,7 @@ impl LabController {
                 continue;
             };
             if let Err(error) = self
-                .apply_runtime(backend, variant, active.endpoint.clone())
+                .apply_runtime(backend, variant, active.endpoint.clone(), None)
                 .await
             {
                 warn!(
@@ -1543,6 +1554,54 @@ impl LabController {
         }
     }
 
+    pub(crate) fn tts_voice_mode(&self, tts_id: &str) -> Option<VoiceMode> {
+        self.catalog
+            .find(tts_id)
+            .filter(|backend| backend.stage == BackendStage::Tts)
+            .map(|backend| backend.voice_mode)
+    }
+
+    pub(crate) fn resolve_tts_voice(&self, tts_id: &str, voice: &str) -> Result<String> {
+        resolve_requested_voice(&self.catalog, tts_id, voice)
+    }
+
+    pub(crate) async fn tts_voice_loaded(&self, tts_id: &str, voice: &str) -> bool {
+        let Some(backend) = self.catalog.find(tts_id) else {
+            return false;
+        };
+        if backend.stage != BackendStage::Tts
+            || resolve_requested_voice(&self.catalog, tts_id, voice).is_err()
+        {
+            return false;
+        }
+        if backend.voice_mode != VoiceMode::Restart {
+            return true;
+        }
+        let active_variant = self
+            .state
+            .read()
+            .await
+            .tts
+            .as_ref()
+            .map(|active| active.variant_id.clone());
+        let Some(active_variant) = active_variant else {
+            return false;
+        };
+        self.host_runtime
+            .status()
+            .await
+            .ok()
+            .flatten()
+            .filter(HostAgentStatus::fresh)
+            .is_some_and(|status| {
+                status.processes.iter().any(|process| {
+                    process.variant_id == active_variant
+                        && process.voice.eq_ignore_ascii_case(voice)
+                        && matches!(process.state.as_str(), "starting" | "running")
+                })
+            })
+    }
+
     pub async fn activate(&self, request: ActivateStackRequest) -> LabStackStatus {
         let snapshot_runtime = self.runtime.read().await.clone();
         let snapshot_state = self.state.read().await.clone();
@@ -1584,6 +1643,19 @@ impl LabController {
         } else {
             None
         };
+        let requested_tts_id = request
+            .tts_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .unwrap_or(snapshot_runtime.tts_id.as_str());
+        let voice_requires_restart = requested_voice.as_ref().is_some_and(|voice| {
+            self.catalog
+                .find(requested_tts_id)
+                .is_some_and(|backend| backend.voice_mode == VoiceMode::Restart)
+                && snapshot_runtime.tts_id == requested_tts_id
+                && !voice.eq_ignore_ascii_case(&snapshot_runtime.cfg.supertonic_voice)
+        });
 
         // Drop no-op stage switches *before* prepare so a full UI stack restore
         // does not mark already-live stages as "preparing" forever and does not
@@ -1593,7 +1665,13 @@ impl LabController {
             other => other.map(str::to_string),
         };
         let tts_id = match request.tts_id.as_deref() {
-            Some(id) if self.stage_already_active(BackendStage::Tts, id).await => None,
+            Some(id)
+                if self.stage_already_active(BackendStage::Tts, id).await
+                    && !voice_requires_restart =>
+            {
+                None
+            }
+            None if voice_requires_restart => Some(requested_tts_id.to_string()),
             other => other.map(str::to_string),
         };
         let llm_id = match request.llm_id.as_deref() {
@@ -1694,7 +1772,10 @@ impl LabController {
         // Start + health + warm the replacements while the gate remains closed.
         let mut plans: Vec<StagePlan> = Vec::new();
         if let Some(id) = asr_id.as_deref() {
-            match self.bring_up_stage(BackendStage::Asr, id).await {
+            match self
+                .bring_up_stage(BackendStage::Asr, id, false, None)
+                .await
+            {
                 Ok(plan) => {
                     if !plan.already_active {
                         plans.push(plan);
@@ -1716,7 +1797,15 @@ impl LabController {
         }
         if errors.is_empty() {
             if let Some(id) = tts_id.as_deref() {
-                match self.bring_up_stage(BackendStage::Tts, id).await {
+                match self
+                    .bring_up_stage(
+                        BackendStage::Tts,
+                        id,
+                        voice_requires_restart,
+                        requested_voice.as_deref(),
+                    )
+                    .await
+                {
                     Ok(plan) => {
                         if !plan.already_active {
                             plans.push(plan);
@@ -1739,7 +1828,10 @@ impl LabController {
         }
         if errors.is_empty() {
             if let Some(id) = llm_id.as_deref() {
-                match self.bring_up_stage(BackendStage::Llm, id).await {
+                match self
+                    .bring_up_stage(BackendStage::Llm, id, false, None)
+                    .await
+                {
                     Ok(plan) => {
                         if !plan.already_active {
                             plans.push(plan);
@@ -1776,7 +1868,10 @@ impl LabController {
         let has_switch = !plans.is_empty();
 
         for plan in &plans {
-            if let Err(error) = self.commit_stage(plan).await {
+            let voice_override = (plan.stage == BackendStage::Tts)
+                .then_some(requested_voice.as_deref())
+                .flatten();
+            if let Err(error) = self.commit_stage(plan, voice_override).await {
                 self.emit_transition(
                     plan.stage,
                     TransitionPhase::Failed,
@@ -1811,8 +1906,11 @@ impl LabController {
             return status;
         }
 
-        if let Some(voice) = requested_voice.as_ref() {
-            self.runtime.write().await.cfg.supertonic_voice = voice.clone();
+        let has_tts_plan = plans.iter().any(|plan| plan.stage == BackendStage::Tts);
+        if !has_tts_plan {
+            if let Some(voice) = requested_voice.as_ref() {
+                self.runtime.write().await.cfg.supertonic_voice = voice.clone();
+            }
         }
 
         // Always publish a terminal "ready" for stages that are live so the UI
@@ -2063,10 +2161,16 @@ impl LabController {
     /// Start + health + warm without cutting over runtime.
     /// Host/remote variants fail fast; if unreachable, fall back to a managed
     /// container variant when Docker control is enabled.
-    async fn bring_up_stage(&self, stage: BackendStage, backend_id: &str) -> Result<StagePlan> {
+    async fn bring_up_stage(
+        &self,
+        stage: BackendStage,
+        backend_id: &str,
+        force_restart: bool,
+        requested_voice: Option<&str>,
+    ) -> Result<StagePlan> {
         let (backend, candidates) = self.stage_candidates(stage, backend_id)?;
 
-        if self.stage_already_active(stage, backend_id).await {
+        if !force_restart && self.stage_already_active(stage, backend_id).await {
             let rt = self.runtime.read().await;
             let active_ep = self.current_stage_endpoint(stage, &rt);
             if let Some(active_variant) = candidates
@@ -2119,7 +2223,17 @@ impl LabController {
                     .await;
                     match self
                         .host_runtime
-                        .start(stage, backend_id, variant, &endpoint)
+                        .start(
+                            stage,
+                            backend_id,
+                            variant,
+                            &endpoint,
+                            if stage == BackendStage::Tts {
+                                requested_voice.unwrap_or(&backend.default_voice)
+                            } else {
+                                ""
+                            },
+                        )
                         .await
                     {
                         Ok(pid) => {
@@ -2360,7 +2474,7 @@ impl LabController {
     }
 
     /// Stop siblings and cut runtime over using the plan from bring_up.
-    async fn commit_stage(&self, plan: &StagePlan) -> Result<()> {
+    async fn commit_stage(&self, plan: &StagePlan, voice_override: Option<&str>) -> Result<()> {
         let backend = self
             .catalog
             .find(&plan.backend_id)
@@ -2432,7 +2546,7 @@ impl LabController {
                 .await?;
         }
 
-        self.apply_runtime(backend, variant, plan.endpoint.clone())
+        self.apply_runtime(backend, variant, plan.endpoint.clone(), voice_override)
             .await?;
         let active = ActiveBackend {
             backend_id: backend.id.clone(),
@@ -2465,8 +2579,8 @@ impl LabController {
 
     #[allow(dead_code)]
     async fn switch_stage(&self, stage: BackendStage, backend_id: &str) -> Result<()> {
-        let plan = self.bring_up_stage(stage, backend_id).await?;
-        self.commit_stage(&plan).await
+        let plan = self.bring_up_stage(stage, backend_id, false, None).await?;
+        self.commit_stage(&plan, None).await
     }
 
     async fn download_artifacts(
@@ -2967,6 +3081,7 @@ impl LabController {
         backend: &BackendDefinition,
         variant: &BackendVariant,
         endpoint: String,
+        voice_override: Option<&str>,
     ) -> Result<()> {
         let mut rt = self.runtime.write().await;
         match backend.stage {
@@ -2982,9 +3097,11 @@ impl LabController {
                 if backend.native_sample_rate > 0 {
                     rt.cfg.tts_native_sample_rate = backend.native_sample_rate;
                 }
-                if !backend.default_voice.is_empty() {
-                    rt.cfg.supertonic_voice = backend.default_voice.clone();
-                }
+                rt.cfg.supertonic_voice = voice_override
+                    .map(str::trim)
+                    .filter(|voice| !voice.is_empty())
+                    .unwrap_or(&backend.default_voice)
+                    .to_string();
             }
             BackendStage::Llm => {
                 rt.llm_id = backend.id.clone();
@@ -3062,8 +3179,19 @@ impl LabController {
                 .ok_or_else(|| anyhow!("rollback variant '{}' missing", active.variant_id))?;
             if active.container.is_empty() {
                 if !variant.host_profile.is_empty() {
+                    let active_voice = if backend.stage == BackendStage::Tts {
+                        self.runtime.read().await.cfg.supertonic_voice.clone()
+                    } else {
+                        String::new()
+                    };
                     self.host_runtime
-                        .start(backend.stage, &active.backend_id, variant, &active.endpoint)
+                        .start(
+                            backend.stage,
+                            &active.backend_id,
+                            variant,
+                            &active.endpoint,
+                            &active_voice,
+                        )
                         .await
                         .with_context(|| format!("restore host backend {}", active.backend_id))?;
                     self.wait_for_health(backend, variant, &active.endpoint)
@@ -3224,7 +3352,7 @@ impl LabController {
                         }
                         self.wait_for_health(&fallback, &variant, &fallback_endpoint)
                             .await?;
-                        self.apply_runtime(&fallback, &variant, fallback_endpoint.clone())
+                        self.apply_runtime(&fallback, &variant, fallback_endpoint.clone(), None)
                             .await
                     }
                     .await;
@@ -3584,6 +3712,7 @@ mod tests {
                 model: "a".into(),
                 default_voice: String::new(),
                 voices: vec![],
+                voice_mode: VoiceMode::Fixed,
                 native_sample_rate: 0,
                 languages: vec![],
                 resources: crate::registry::ResourceEstimate {
@@ -3624,8 +3753,13 @@ mod tests {
             description: String::new(),
             protocol: "mock".into(),
             model: id.into(),
-            default_voice: String::new(),
+            default_voice: if stage == BackendStage::Tts {
+                "default".into()
+            } else {
+                String::new()
+            },
             voices: vec![],
+            voice_mode: VoiceMode::Fixed,
             native_sample_rate: 0,
             languages: vec![],
             resources: crate::registry::ResourceEstimate {
