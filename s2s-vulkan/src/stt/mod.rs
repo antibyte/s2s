@@ -2,6 +2,7 @@
 
 use crate::audio::pcm::encode_wav_f32;
 use crate::config::Config;
+use crate::gateway::{read_response_bounded, MAX_GATEWAY_JSON_BYTES};
 use crate::messages::{Control, PipelineEvent, QueueItem, Transcription, VadAudio};
 use crate::runtime::SharedRuntime;
 use anyhow::{anyhow, Context, Result};
@@ -155,11 +156,15 @@ pub(crate) async fn transcribe_wav_bytes(
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+        let body = read_response_bounded(resp, MAX_GATEWAY_JSON_BYTES)
+            .await
+            .map(|body| String::from_utf8_lossy(&body).into_owned())
+            .unwrap_or_else(|error| format!("{error:#}"));
         return Err(anyhow!("whisper-server {status}: {body}"));
     }
 
-    let body = resp.text().await?;
+    let body = read_response_bounded(resp, MAX_GATEWAY_JSON_BYTES).await?;
+    let body = String::from_utf8(body).context("whisper-server response is not UTF-8")?;
     parse_whisper_response(&body)
 }
 
@@ -198,7 +203,7 @@ pub async fn health_check(base: &str) -> bool {
     let Some(client) = client else { return false };
     let url = format!("{}/", base.trim_end_matches('/'));
     match client.get(&url).send().await {
-        Ok(r) => r.status().is_success() || r.status().as_u16() == 404,
+        Ok(r) => r.status().is_success(),
         Err(_) => {
             // Some builds only expose /inference — try OPTIONS/GET on inference is useless;
             // treat connection refusal as down, anything else as up-ish.

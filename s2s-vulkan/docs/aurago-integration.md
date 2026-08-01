@@ -30,7 +30,7 @@ No matrix benchmarks are required on the happy path.
 | `POST` | `/api/v1/models/{id}/download` | Existing advanced-Lab model install API |
 | `POST` | `/v1/audio/transcriptions` | Stable ASR gateway → active backend |
 | `POST` | `/api/v1/asr` | Alias of transcriptions |
-| `POST` | `/v1/audio/speech` | Stable TTS gateway → active backend |
+| `POST` | `/v1/audio/speech` | Stable TTS gateway → active backend (`model` is rejected) |
 | `POST` | `/api/v1/tts` | Alias of speech |
 | `GET` | `/ready` | Stack health for call answer / chat (`503` if not ready) |
 | `GET` | `/health` | Process liveness |
@@ -103,12 +103,19 @@ AuraGo `SpeechRecognizer` / `SpeechSynthesizer` call the **fixed** gateway paths
 | AuraGo need | s2s contract |
 |-------------|------------------------|
 | WAV → text | `POST /v1/audio/transcriptions` multipart `file` or raw `audio/wav`; valid PCM-WAV only, maximum 8 MiB → `{ "text", "asr_id" }` |
-| Text → PCM/WAV | `POST /v1/audio/speech` JSON `{ "input", "voice", "language", "response_format": "wav" }` → audio + `x-s2s-tts-id` |
-| Pre-answer check | `GET /ready` → `{ "ready", "asr_id", "tts_id", "asr_ok", "tts_ok", "message" }` (`503` if not ready) |
+| Text → PCM/WAV | `POST /v1/audio/speech` JSON `{ "input", "voice", "language", "response_format": "wav" }` → audio + `x-s2s-tts-id`; a non-empty `model` is HTTP `400` and is never forwarded |
+| Pre-answer check | `GET /ready` → `{ "ready", "asr_id", "tts_id", "asr_ok", "tts_ok", "message" }` (`503` unless both active IDs match the runtime, both stages are `idle`/`ready`, and both probes return non-HTML `2xx`) |
 | Liveness | `GET /health` → `{ "status": "ok" }` |
 
 LLM remains AuraGo. s2s lab pipeline LLM is unused for production telephony.
 Omitting `llm_id` from a stack request preserves the active s2s LLM entry.
+
+Gateway response limits are enforced while streaming: JSON and upstream error
+bodies are capped at 1 MiB, TTS audio at 32 MiB. `Content-Length` is checked
+before reading and chunked responses are stopped as soon as the limit is
+exceeded. A transition in `warming`, `rollback`, or `failed` (and any other
+non-terminal phase) is not ready; HTTP `404` is never treated as a successful
+readiness probe.
 
 ## Production env hints
 

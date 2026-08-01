@@ -4,13 +4,56 @@
 //! `PUT /api/v1/stack`. See `docs/aurago-integration.md`.
 
 use crate::config::Config;
-use crate::lab::LabController;
+use crate::lab::{stage_is_ready, LabController};
 use crate::stt;
 use crate::tts::{apply_preloaded_voice_policy, http_is_qwen_public, iso_tts_language};
 use anyhow::{anyhow, Context, Result};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
+
+/// Responses from gateway upstreams are bounded independently of the request
+/// body. JSON/error responses must stay small while synthesized audio gets a
+/// larger, but still finite, budget.
+pub(crate) const MAX_GATEWAY_JSON_BYTES: usize = 1 << 20;
+pub(crate) const MAX_GATEWAY_TTS_BYTES: usize = 32 * 1024 * 1024;
+
+pub(crate) async fn read_response_bounded(
+    response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>> {
+    let content_length = response.content_length();
+    if let Some(length) = content_length {
+        if length > limit as u64 {
+            return Err(anyhow!(
+                "upstream response exceeds {} byte limit (Content-Length {})",
+                limit,
+                length
+            ));
+        }
+    }
+
+    let mut stream = response.bytes_stream();
+    let mut body = Vec::with_capacity(
+        content_length
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or(0)
+            .min(limit),
+    );
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("read upstream response")?;
+        let next_len = body
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| anyhow!("upstream response size overflow"))?;
+        if next_len > limit {
+            return Err(anyhow!("upstream response exceeds {} byte limit", limit));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GatewayReady {
@@ -44,6 +87,19 @@ pub struct GatewaySpeechRequest {
 }
 
 impl GatewaySpeechRequest {
+    pub fn validate(&self) -> Result<()> {
+        if self
+            .model
+            .as_deref()
+            .is_some_and(|model| !model.trim().is_empty())
+        {
+            return Err(anyhow!(
+                "'model' is not accepted; the active Speech Lab stack owns the TTS model"
+            ));
+        }
+        self.text().map(|_| ())
+    }
+
     pub fn text(&self) -> Result<&str> {
         self.input
             .as_deref()
@@ -95,20 +151,32 @@ impl LabController {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| stack.runtime.tts_url.clone());
 
-        let asr_ok = probe_service(&self.client, &asr_endpoint, true).await;
-        let tts_ok = probe_service(&self.client, &tts_endpoint, false).await;
-        let ready = asr_ok && tts_ok && !asr_id.is_empty() && !tts_id.is_empty();
+        let asr_stable = stage_is_ready(stack.asr.as_ref(), &stack.asr_transition, &asr_id);
+        let tts_stable = stage_is_ready(stack.tts.as_ref(), &stack.tts_transition, &tts_id);
+        let asr_ok = asr_stable && probe_service(&self.client, &asr_endpoint, true).await;
+        let tts_ok = tts_stable && probe_service(&self.client, &tts_endpoint, false).await;
+        let ready = asr_ok && tts_ok;
         let message = if ready {
             format!("ready · asr={asr_id} tts={tts_id}")
         } else {
             let mut parts = Vec::new();
-            if asr_id.is_empty() {
-                parts.push("asr not selected".into());
+            if !asr_stable {
+                parts.push(stage_not_ready_message(
+                    "asr",
+                    stack.asr.as_ref(),
+                    &stack.asr_transition,
+                    &asr_id,
+                ));
             } else if !asr_ok {
                 parts.push(format!("asr '{asr_id}' unreachable"));
             }
-            if tts_id.is_empty() {
-                parts.push("tts not selected".into());
+            if !tts_stable {
+                parts.push(stage_not_ready_message(
+                    "tts",
+                    stack.tts.as_ref(),
+                    &stack.tts_transition,
+                    &tts_id,
+                ));
             } else if !tts_ok {
                 parts.push(format!("tts '{tts_id}' unreachable"));
             }
@@ -162,6 +230,7 @@ impl LabController {
 
     /// Proxy speech synthesis to the active TTS HTTP sidecar.
     pub async fn gateway_speech(&self, request: GatewaySpeechRequest) -> Result<GatewayAudio> {
+        request.validate()?;
         let text = request.text()?.to_string();
         let rt = self.runtime.read().await;
         let tts_id = rt.tts_id.clone();
@@ -198,16 +267,13 @@ impl LabController {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or(cfg.supertonic_voice.as_str());
-        let model = request
-            .model
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(if cfg.tts_model.trim().is_empty() {
-                "tts"
-            } else {
-                cfg.tts_model.as_str()
-            });
+        // The active stack is authoritative. A caller-provided model is
+        // rejected above and can never override or leak to the sidecar.
+        let model = if cfg.tts_model.trim().is_empty() {
+            "tts"
+        } else {
+            cfg.tts_model.as_str()
+        };
 
         let mut body = json!({
             "model": model,
@@ -244,7 +310,10 @@ impl LabController {
             .with_context(|| format!("gateway TTS POST {url}"))?;
         if !response.status().is_success() {
             let status = response.status();
-            let err_body = response.text().await.unwrap_or_default();
+            let err_body = read_response_bounded(response, MAX_GATEWAY_JSON_BYTES)
+                .await
+                .map(|body| String::from_utf8_lossy(&body).into_owned())
+                .unwrap_or_else(|error| format!("{error:#}"));
             return Err(anyhow!("TTS HTTP {status}: {err_body}"));
         }
         let content_type = response
@@ -257,7 +326,7 @@ impl LabController {
                 "audio/wav"
             })
             .to_string();
-        let bytes = response.bytes().await?.to_vec();
+        let bytes = read_response_bounded(response, MAX_GATEWAY_TTS_BYTES).await?;
         if bytes.is_empty() {
             return Err(anyhow!("TTS returned empty body"));
         }
@@ -280,21 +349,50 @@ async fn probe_service(client: &reqwest::Client, endpoint: &str, is_asr: bool) -
             .send()
             .await
         {
-            Ok(response) if response.status().is_success() || response.status().as_u16() == 404 => {
-                let ctype = response
-                    .headers()
-                    .get(reqwest::header::CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                if !ctype.contains("text/html") {
-                    return true;
-                }
+            Ok(response)
+                if probe_response_is_healthy(
+                    response.status(),
+                    response
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok()),
+                ) =>
+            {
+                return true;
             }
             _ => {}
         }
     }
     false
+}
+
+fn probe_response_is_healthy(status: reqwest::StatusCode, content_type: Option<&str>) -> bool {
+    if !status.is_success() {
+        return false;
+    }
+    let ctype = content_type.unwrap_or("").to_ascii_lowercase();
+    !ctype.contains("text/html")
+}
+
+fn stage_not_ready_message(
+    name: &str,
+    active: Option<&crate::lab::ActiveBackend>,
+    transition: &crate::lab::StageTransition,
+    runtime_id: &str,
+) -> String {
+    if runtime_id.is_empty() || active.is_none() {
+        return format!("{name} not selected");
+    }
+    let active_id = active
+        .map(|backend| backend.backend_id.as_str())
+        .unwrap_or_default();
+    if active_id != runtime_id {
+        return format!("{name} backend drift (runtime={runtime_id}, active={active_id})");
+    }
+    format!(
+        "{name} transition {:?}: {}",
+        transition.phase, transition.message
+    )
 }
 
 fn candidate_health_urls(endpoint: &str, is_asr: bool) -> Vec<String> {
@@ -362,5 +460,92 @@ mod tests {
             response_format: None,
         };
         assert_eq!(req.text().unwrap(), "Hallo");
+    }
+
+    #[test]
+    fn speech_request_rejects_caller_model() {
+        let req = GatewaySpeechRequest {
+            input: Some("Hallo".into()),
+            text: None,
+            model: Some("caller-model".into()),
+            voice: None,
+            language: None,
+            response_format: None,
+        };
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn readiness_probe_rejects_json_404_and_html() {
+        assert!(!probe_response_is_healthy(
+            reqwest::StatusCode::NOT_FOUND,
+            Some("application/json")
+        ));
+        assert!(!probe_response_is_healthy(
+            reqwest::StatusCode::OK,
+            Some("text/html")
+        ));
+        assert!(probe_response_is_healthy(
+            reqwest::StatusCode::OK,
+            Some("application/json")
+        ));
+    }
+
+    #[test]
+    fn readiness_requires_matching_active_backend_and_stable_phase() {
+        let active = crate::lab::ActiveBackend {
+            backend_id: "asr-a".into(),
+            variant_id: "asr-a-cpu".into(),
+            accelerator: "cpu".into(),
+            endpoint: "http://127.0.0.1:9".into(),
+            container: String::new(),
+        };
+        let mut transition = crate::lab::StageTransition {
+            stage: crate::registry::BackendStage::Asr,
+            phase: crate::lab::TransitionPhase::Idle,
+            backend_id: "asr-a".into(),
+            variant_id: "asr-a-cpu".into(),
+            message: "idle".into(),
+        };
+        assert!(stage_is_ready(Some(&active), &transition, "asr-a"));
+        transition.phase = crate::lab::TransitionPhase::Warming;
+        assert!(!stage_is_ready(Some(&active), &transition, "asr-a"));
+        transition.phase = crate::lab::TransitionPhase::Ready;
+        assert!(!stage_is_ready(Some(&active), &transition, "asr-other"));
+    }
+
+    #[tokio::test]
+    async fn bounded_response_rejects_declared_and_streamed_oversize() {
+        use tokio::io::AsyncReadExt;
+        use tokio::io::AsyncWriteExt;
+
+        async fn fetch(response: &'static str, limit: usize) -> Result<Vec<u8>> {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request).await;
+                stream.write_all(response.as_bytes()).await.unwrap();
+            });
+            let response = reqwest::Client::new()
+                .get(format!("http://{address}/"))
+                .send()
+                .await
+                .unwrap();
+            let result = read_response_bounded(response, limit).await;
+            server.await.unwrap();
+            result
+        }
+
+        let declared = fetch("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello", 4).await;
+        assert!(declared.unwrap_err().to_string().contains("Content-Length"));
+
+        let streamed = fetch(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n",
+            3,
+        )
+        .await;
+        assert!(streamed.unwrap_err().to_string().contains("byte limit"));
     }
 }

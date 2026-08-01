@@ -165,6 +165,13 @@ async fn post_gateway_speech(
     State(state): State<AppState>,
     Json(request): Json<GatewaySpeechRequest>,
 ) -> Response {
+    if let Err(error) = request.validate() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("{error:#}") })),
+        )
+            .into_response();
+    }
     match state.lab.gateway_speech(request).await {
         Ok(audio) => {
             let mut response = Response::new(Body::from(audio.bytes));
@@ -179,12 +186,11 @@ async fn post_gateway_speech(
         }
         Err(error) => {
             let message = format!("{error:#}");
-            let status = if message.contains("missing non-empty") {
-                StatusCode::BAD_REQUEST
-            } else {
-                StatusCode::BAD_GATEWAY
-            };
-            (status, Json(serde_json::json!({ "error": message }))).into_response()
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": message })),
+            )
+                .into_response()
         }
     }
 }

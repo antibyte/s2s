@@ -150,6 +150,21 @@ impl StageTransition {
     }
 }
 
+pub(crate) fn stage_is_ready(
+    active: Option<&ActiveBackend>,
+    transition: &StageTransition,
+    runtime_id: &str,
+) -> bool {
+    active.is_some_and(|backend| {
+        !runtime_id.is_empty()
+            && backend.backend_id == runtime_id
+            && matches!(
+                transition.phase,
+                TransitionPhase::Idle | TransitionPhase::Ready
+            )
+    })
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LabEvent {
@@ -2823,9 +2838,7 @@ impl LabController {
                 .send()
                 .await
             {
-                Ok(response)
-                    if response.status().is_success() || response.status().as_u16() == 404 =>
-                {
+                Ok(response) if response.status().is_success() => {
                     // Reject HTML (e.g. web UI occupying the same host port).
                     let ctype = response
                         .headers()
