@@ -114,7 +114,7 @@ jobs:
           set -euo pipefail
           owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
           digest() { docker buildx imagetools inspect "ghcr.io/$owner/$1:$TAG" --format '{{json .Manifest.Digest}}' | tr -d '"'; }
-          gateway=$(digest s2s-vulkan)
+          gateway=$(docker buildx imagetools inspect "ghcr.io/$owner/s2s-vulkan:${GITHUB_REF_NAME}" --format '{{json .Manifest.Digest}}' | tr -d '"')
           asr=$(digest s2s-whisper-fw)
           llm=$(digest s2s-llama-granite)
           web=$(digest s2s-web)
