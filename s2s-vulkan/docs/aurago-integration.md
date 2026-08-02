@@ -1,6 +1,6 @@
 # AuraGo ↔ s2s Lab integration contract
 
-Status: **implemented contract** (capability, suggestions, gateway, readiness, and transactional stack activation).
+Status: **implemented contract** (capability, suggestions, gateway, readiness, transactional stack activation, and the verified managed bundle).
 
 s2s-Lab becomes a speech sidecar for [AuraGo](https://github.com/antibyte/AuraGo):
 
@@ -34,6 +34,14 @@ No matrix benchmarks are required on the happy path.
 | `POST` | `/api/v1/tts` | Alias of speech |
 | `GET` | `/ready` | Stack health for call answer / chat (`503` if not ready) |
 | `GET` | `/health` | Process liveness |
+
+The published `speech-lab-bundle.json` is available as a GitHub release asset
+alongside a detached SHA-256 checksum.
+It contains only immutable `ghcr.io/antibyte/*@sha256:…` references. AuraGo
+accepts that publisher and digest format only; it never executes an arbitrary
+Compose file. The managed profile uses the stable bundled ASR/TTS/LLM images
+and keeps optional model downloads disabled until the Lab UI explicitly starts
+one.
 
 ## Capability profile
 
@@ -135,6 +143,14 @@ become true.
 | `S2S_LAB_IDLE_UNLOAD_SECS` | `120` | `0` (always warm for chat/SIP) |
 | `S2S_ALLOW_EXPERIMENTAL` | operator choice | `false` for stable-first setup |
 | Bind / network | UI via `:8088` | orchestrator on internal Docker network (`s2s-vulkan:8765`) or loopback-only host overlay |
+
+AuraGo's managed deployment pulls the release asset once after administrator
+confirmation, creates a dedicated `aurago-speech-lab` network and labeled
+containers, and then waits for `/health` and `/ready`. On native AuraGo the
+gateway and Lab UI are published only on `127.0.0.1:8765` and `127.0.0.1:8766`.
+On Docker AuraGo both remain private to the shared network. Restarting AuraGo
+may start an already installed bundle, but it never performs an implicit image
+update or model download.
 
 AuraGo should call the orchestrator **directly** on port 8765 for `/health`, `/ready`,
 and `/v1/audio/*`. The lab web UI on `:8088` only reverse-proxies `/api/` and `/ws`.

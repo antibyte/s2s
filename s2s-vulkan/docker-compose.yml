@@ -101,6 +101,7 @@ services:
     environment:
       <<: [*gpu-env, *model-env]
       S2S_DOCKER: "1"
+      S2S_BUNDLE_VERSION: ${S2S_BUNDLE_VERSION:-unknown}
       RUST_LOG: ${RUST_LOG:-info}
       S2S_BACKEND_CATALOG: /app/config/backends.json
       S2S_WHISPER_URL: ${S2S_WHISPER_URL:-http://whisper-tiny:8082}

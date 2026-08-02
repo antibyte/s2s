@@ -28,6 +28,7 @@ use tower_http::cors::CorsLayer;
 use tracing::{error, info, warn};
 
 const MAX_ASR_WAV_BYTES: usize = 8 * 1024 * 1024;
+const SPEECH_LAB_CONTRACT_VERSION: &str = "speech-lab/v1";
 const MAX_ASR_REQUEST_BYTES: usize = MAX_ASR_WAV_BYTES + 64 * 1024;
 
 #[derive(Clone)]
@@ -96,13 +97,40 @@ pub async fn run_websocket_server(cfg: Config, gpu_report: GpuReport) -> Result<
 }
 
 async fn get_health() -> impl IntoResponse {
-    Json(LabController::health_ok())
+    let mut health = LabController::health_ok();
+    if let Some(object) = health.as_object_mut() {
+        object.insert(
+            "contract_version".into(),
+            SPEECH_LAB_CONTRACT_VERSION.into(),
+        );
+        object.insert(
+            "bundle_version".into(),
+            std::env::var("S2S_BUNDLE_VERSION")
+                .unwrap_or_else(|_| "unknown".into())
+                .into(),
+        );
+    }
+    Json(health)
 }
 
 async fn get_ready(State(state): State<AppState>) -> Response {
     let ready = state.lab.gateway_ready().await;
     let status = readiness_http_status(ready.ready);
-    (status, Json(ready)).into_response()
+    let mut value =
+        serde_json::to_value(ready).unwrap_or_else(|_| serde_json::json!({"ready": false}));
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "contract_version".into(),
+            SPEECH_LAB_CONTRACT_VERSION.into(),
+        );
+        object.insert(
+            "bundle_version".into(),
+            std::env::var("S2S_BUNDLE_VERSION")
+                .unwrap_or_else(|_| "unknown".into())
+                .into(),
+        );
+    }
+    (status, Json(value)).into_response()
 }
 
 fn readiness_http_status(ready: bool) -> StatusCode {
@@ -323,7 +351,21 @@ async fn get_catalog(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn get_capability(State(state): State<AppState>) -> impl IntoResponse {
-    Json(state.lab.catalog().await.hardware)
+    let hardware = state.lab.catalog().await.hardware;
+    let mut value = serde_json::to_value(hardware).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "contract_version".into(),
+            SPEECH_LAB_CONTRACT_VERSION.into(),
+        );
+        object.insert(
+            "bundle_version".into(),
+            std::env::var("S2S_BUNDLE_VERSION")
+                .unwrap_or_else(|_| "unknown".into())
+                .into(),
+        );
+    }
+    Json(value)
 }
 
 async fn get_suggestions(

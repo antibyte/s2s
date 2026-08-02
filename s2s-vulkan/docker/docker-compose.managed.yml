@@ -1,0 +1,21 @@
+# AuraGo-managed Speech Lab profile.
+# Every image is supplied by the signed bundle manifest. This file is for
+# inspection and local validation; AuraGo uses the same resource contract via
+# the Docker Engine API and never executes arbitrary Compose input.
+services:
+  model-init:
+    image: ${S2S_MODEL_INIT_IMAGE:?bundle manifest required}
+  asr:
+    image: ${S2S_ASR_IMAGE:?bundle manifest required}
+  llm:
+    image: ${S2S_LLM_IMAGE:?bundle manifest required}
+  tts:
+    image: ${S2S_TTS_IMAGE:?bundle manifest required}
+  s2s:
+    image: ${S2S_GATEWAY_IMAGE:?bundle manifest required}
+    ports:
+      - "127.0.0.1:8765:8765"
+  web:
+    image: ${S2S_WEB_IMAGE:?bundle manifest required}
+    ports:
+      - "127.0.0.1:8766:80"

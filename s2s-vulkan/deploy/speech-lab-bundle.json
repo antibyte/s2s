@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "bundle_version": "0.1.0",
+  "contract_version": "speech-lab/v1",
+  "publisher": "ghcr.io/antibyte",
+  "images": {
+    "gateway": "ghcr.io/antibyte/s2s-vulkan@sha256:RELEASE_DIGEST_GATEWAY",
+    "asr": "ghcr.io/antibyte/s2s-whisper-fw@sha256:RELEASE_DIGEST_ASR",
+    "tts": "ghcr.io/antibyte/s2s-vulkan@sha256:RELEASE_DIGEST_TTS",
+    "llm": "ghcr.io/antibyte/s2s-llama-granite@sha256:RELEASE_DIGEST_LLM",
+    "web": "ghcr.io/antibyte/s2s-web@sha256:RELEASE_DIGEST_WEB",
+    "model_init": "ghcr.io/antibyte/s2s-model-init@sha256:RELEASE_DIGEST_INIT"
+  },
+  "network": "aurago-speech-lab",
+  "ports": {
+    "gateway": 8765,
+    "web": 8766
+  },
+  "volumes": ["aurago-speech-lab-models", "aurago-speech-lab-data"],
+  "start_order": ["model_init", "asr", "llm", "tts", "gateway", "web"],
+  "services": [
+    {"role": "model_init", "image": "model_init", "restart": "no"},
+    {"role": "asr", "image": "asr", "health_path": "/health", "port": 8082},
+    {"role": "llm", "image": "llm", "health_path": "/health", "port": 8081,
+      "command": ["-m", "/opt/s2s-models/granite-3.3-2b-instruct-q4_k_m.gguf", "--host", "0.0.0.0", "--port", "8081", "-c", "2048", "--alias", "granite-3.3-2b-instruct"]},
+    {"role": "tts", "image": "tts", "health_path": "/health", "port": 8083,
+      "command": ["--mode", "tts-server", "--host", "0.0.0.0", "--port", "8083", "--skip-health", "--supertonic-model-dir", "/opt/s2s-models/supertonic/onnx", "--supertonic-voice", "M1", "--tts-sample-rate", "16000"]},
+    {"role": "gateway", "image": "gateway", "health_path": "/health", "port": 8765,
+      "command": ["--mode", "lab", "--host", "0.0.0.0", "--port", "8765", "--tts", "http", "--tts-url", "http://aurago-speech-lab-tts:8083/v1/audio/speech", "--llm-base-url", "http://aurago-speech-lab-llm:8081/v1", "--whisper-url", "http://aurago-speech-lab-asr:8082"]},
+    {"role": "web", "image": "web", "health_path": "/", "port": 80}
+  ],
+  "stable_backends": {
+    "asr": ["faster-whisper-tiny"],
+    "tts": ["supertonic"],
+    "llm": ["granite-3.3-2b-instruct"]
+  },
+  "hardware": {"gpu_optional": true, "minimum_memory_mb": 4096},
+  "models": {"download_on_start": false, "optional_downloads_require_ui_approval": true}
+}

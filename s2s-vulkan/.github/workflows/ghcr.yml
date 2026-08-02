@@ -18,6 +18,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: s2s-vulkan
+  BUNDLE_PATH: deploy/speech-lab-bundle.json
 
 jobs:
   build-and-push:
@@ -58,6 +59,7 @@ jobs:
           images: ${{ steps.image.outputs.name }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=sha-${{ github.sha }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
@@ -83,6 +85,61 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
+
+      - name: Build and push managed sidecar images
+        if: github.event_name != 'pull_request'
+        env:
+          OWNER: ${{ github.repository_owner }}
+          TAG: sha-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push -t "ghcr.io/$owner/s2s-whisper-fw:$TAG" -f docker/Dockerfile.whisper .
+          docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push -t "ghcr.io/$owner/s2s-llama-granite:$TAG" -f docker/Dockerfile.llama .
+          docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push -t "ghcr.io/$owner/s2s-model-init:$TAG" -f docker/Dockerfile.backend-init .
+          docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push -t "ghcr.io/$owner/s2s-web:$TAG" -f web/Dockerfile web
+
+      - name: Publish bundle manifest
+        if: github.event_name != 'pull_request'
+        env:
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.sha }}
+          TAG: sha-${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          digest() { docker buildx imagetools inspect "ghcr.io/$owner/$1:$TAG" --format '{{json .Manifest.Digest}}' | tr -d '"'; }
+          gateway=$(digest s2s-vulkan)
+          asr=$(digest s2s-whisper-fw)
+          llm=$(digest s2s-llama-granite)
+          web=$(digest s2s-web)
+          init=$(digest s2s-model-init)
+          python - "$gateway" "$asr" "$llm" "$web" "$init" <<'PY'
+          import json, os, sys
+          with open(os.environ["BUNDLE_PATH"], encoding="utf-8") as fh:
+              bundle = json.load(fh)
+          owner = os.environ["OWNER"].lower()
+          version = os.environ.get("GITHUB_REF_NAME") or ("sha-" + os.environ["SHA"][:12])
+          names = ["s2s-vulkan", "s2s-whisper-fw", "s2s-llama-granite", "s2s-web", "s2s-model-init"]
+          digests = dict(zip(names, sys.argv[1:]))
+          image = lambda name: f"ghcr.io/{owner}/{name}@{digests[name]}"
+          bundle["publisher"] = f"ghcr.io/{owner}"
+          bundle["bundle_version"] = version
+          bundle["images"] = {
+              "gateway": image("s2s-vulkan"), "asr": image("s2s-whisper-fw"),
+              "tts": image("s2s-vulkan"), "llm": image("s2s-llama-granite"),
+              "web": image("s2s-web"), "model_init": image("s2s-model-init")
+          }
+          with open("speech-lab-bundle.json", "w", encoding="utf-8") as fh:
+              json.dump(bundle, fh, indent=2)
+              fh.write("\n")
+          PY
+          sha256sum speech-lab-bundle.json > speech-lab-bundle.json.sha256
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            gh release create "${GITHUB_REF_NAME}" --generate-notes || true
+            gh release upload "${GITHUB_REF_NAME}" speech-lab-bundle.json speech-lab-bundle.json.sha256 --clobber
+          fi
 
       - name: Summary
         if: github.event_name != 'pull_request'
