@@ -103,6 +103,16 @@ jobs:
           docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push -t "ghcr.io/$owner/s2s-model-init:$TAG" -f s2s-vulkan/docker/Dockerfile.backend-init s2s-vulkan
           docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push -t "ghcr.io/$owner/s2s-web:$TAG" -f s2s-vulkan/web/Dockerfile s2s-vulkan/web
 
+      - name: Make managed GHCR packages publicly pullable
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for package in s2s-vulkan s2s-whisper-fw s2s-llama-granite s2s-model-init s2s-web; do
+            gh api --method PUT "user/packages/container/${package}/visibility" -f visibility=public >/dev/null
+          done
+
       - name: Publish bundle manifest
         if: github.event_name != 'pull_request'
         env:
