@@ -191,7 +191,9 @@ fn infer_tts_id(cfg: &Config) -> String {
         TtsBackend::Http => {
             let u = cfg.tts_url.to_ascii_lowercase();
             let m = cfg.tts_model.to_ascii_lowercase();
-            if u.contains("8084") || m.contains("kokoro") || u.contains("kokoro") {
+            if u.contains("8091") || m.contains("xtts") || u.contains("xtts") {
+                "xtts-v2".into()
+            } else if u.contains("8084") || m.contains("kokoro") || u.contains("kokoro") {
                 "kokoro".into()
             } else if u.contains("vibevoice")
                 || m.contains("vibevoice")
@@ -513,6 +515,17 @@ fn apply_tts(rt: &mut RuntimeState, id: &str) -> Option<String> {
             }
             Some(format!("TTS → HTTP Qwen ({id}) @ {}", rt.cfg.tts_url))
         }
+        "xtts-v2" | "xtts" => {
+            rt.cfg.tts = TtsBackend::Http;
+            rt.cfg.tts_url = "http://127.0.0.1:8091/v1/audio/speech".into();
+            rt.cfg.tts_model = "coqui/XTTS-v2".into();
+            rt.cfg.tts_native_sample_rate = 24_000;
+            rt.cfg.supertonic_voice = "de_sample".into();
+            Some(format!(
+                "TTS → XTTS-v2 ONNX (voice={}) @ {}",
+                rt.cfg.supertonic_voice, rt.cfg.tts_url
+            ))
+        }
         "kokoro" => {
             rt.cfg.tts = TtsBackend::Http;
             rt.cfg.tts_url = "http://127.0.0.1:8084/v1/audio/speech".into();
@@ -659,6 +672,7 @@ pub(crate) async fn reload_whisper_model(base_url: &str, model: &str) -> anyhow:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
 
     #[tokio::test]
     async fn turn_pause_rejects_new_turns_and_waits_for_existing_turn() {
@@ -674,5 +688,26 @@ mod tests {
         assert!(turns.wait_idle(Duration::from_millis(50)).await);
         drop(pause);
         assert!(turns.try_acquire().is_some());
+    }
+
+    #[test]
+    fn xtts_http_endpoint_and_model_are_inferred() {
+        let mut config = Config::parse_from(["s2s-vulkan"]);
+        config.tts = TtsBackend::Http;
+        config.tts_url = "http://host.docker.internal:8091/v1/audio/speech".into();
+        config.tts_model = "coqui/XTTS-v2".into();
+        assert_eq!(infer_tts_id(&config), "xtts-v2");
+    }
+
+    #[tokio::test]
+    async fn xtts_runtime_mapping_uses_24khz_and_default_voice() {
+        let runtime = runtime_from(Config::parse_from(["s2s-vulkan"]));
+        let mut state = runtime.write().await;
+        let message = apply_tts(&mut state, "xtts-v2").unwrap();
+        assert!(message.contains("XTTS-v2"));
+        assert_eq!(state.cfg.tts_url, "http://127.0.0.1:8091/v1/audio/speech");
+        assert_eq!(state.cfg.tts_model, "coqui/XTTS-v2");
+        assert_eq!(state.cfg.tts_native_sample_rate, 24_000);
+        assert_eq!(state.cfg.supertonic_voice, "de_sample");
     }
 }

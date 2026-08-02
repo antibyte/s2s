@@ -46,6 +46,10 @@ pub struct ModelArtifact {
     pub sha256: String,
     #[serde(default)]
     pub size: u64,
+    /// Optional server-side download authentication scheme. Tokens are never
+    /// serialized into the catalog.
+    #[serde(default)]
+    pub auth: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -96,6 +100,7 @@ pub enum VoiceMode {
     #[default]
     Fixed,
 }
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BackendDefinition {
     pub id: String,
@@ -120,6 +125,10 @@ pub struct BackendDefinition {
     pub native_sample_rate: u32,
     #[serde(default)]
     pub languages: Vec<String>,
+    #[serde(default)]
+    pub licenses: Vec<String>,
+    #[serde(default)]
+    pub access_url: String,
     pub resources: ResourceEstimate,
     #[serde(default)]
     pub bundled: bool,
@@ -136,6 +145,18 @@ pub struct StackPreset {
     pub tts_id: String,
     #[serde(default = "default_preset_llm")]
     pub llm_id: String,
+    /// Optional language tags for suggestion filtering (`de`, `en`, …).
+    #[serde(default)]
+    pub languages: Vec<String>,
+    /// Soft VRAM ceiling for the pair (GB); used by suggestions.
+    #[serde(default)]
+    pub max_vram_gb: Option<f32>,
+    /// Free-form latency hint for UI (`low`, `medium`, …).
+    #[serde(default)]
+    pub latency_hint: Option<String>,
+    /// Free-form quality hint for UI (`balanced`, `high`, …).
+    #[serde(default)]
+    pub quality_hint: Option<String>,
 }
 
 fn default_preset_llm() -> String {
@@ -166,8 +187,19 @@ pub struct CatalogBackendStatus {
     pub host_managed: bool,
     pub runtime_state: String,
     pub runtime_reason: String,
+    /// True when any selected (or base) artifact needs Hugging Face auth.
+    /// Tokens themselves are never exposed through the catalog API.
+    #[serde(default)]
+    pub auth_required: bool,
+    /// True when a server-side or in-memory session HF token is available.
+    #[serde(default)]
+    pub hf_token_configured: bool,
 }
 
+/// Hardware + best-effort capacity probe used by catalog and AuraGo setup.
+///
+/// Additive fields (`vram_*`, `ram_*`, `tier`, host agent) are optional /
+/// defaulted so older clients ignore them safely. See `docs/aurago-integration.md`.
 #[derive(Debug, Clone, Serialize)]
 pub struct HardwareProfile {
     pub vendor: String,
@@ -176,6 +208,31 @@ pub struct HardwareProfile {
     pub platform: String,
     pub in_container: bool,
     pub allow_experimental: bool,
+    /// Best-effort device VRAM; `null` when unknown (common in CPU-only containers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vram_total_gb: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vram_free_gb: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ram_total_gb: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ram_available_gb: Option<f32>,
+    /// Fresh Windows host supervisor heartbeat (file control plane).
+    #[serde(default)]
+    pub host_agent_online: bool,
+    /// Host profiles the agent currently advertises as launchable.
+    #[serde(default)]
+    pub host_profiles: Vec<String>,
+    /// Heuristic capacity class: `cpu-light` | `gpu-8gb` | `gpu-16gb+` | `host-vulkan`.
+    #[serde(default = "default_capability_tier")]
+    pub tier: String,
+}
+
+/// Alias used by AuraGo docs and the capability endpoint.
+pub type CapabilityProfile = HardwareProfile;
+
+fn default_capability_tier() -> String {
+    "cpu-light".into()
 }
 
 impl HardwareProfile {
@@ -208,7 +265,7 @@ impl HardwareProfile {
                 }
             }
         }
-        Self {
+        let mut profile = Self {
             vendor: std::env::var("S2S_LAB_GPU_VENDOR")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
@@ -225,8 +282,193 @@ impl HardwareProfile {
                 .unwrap_or_else(|| std::env::consts::OS.to_string()),
             in_container: report.in_container,
             allow_experimental: env_truthy("S2S_ALLOW_EXPERIMENTAL"),
+            vram_total_gb: None,
+            vram_free_gb: None,
+            ram_total_gb: None,
+            ram_available_gb: None,
+            host_agent_online: false,
+            host_profiles: Vec::new(),
+            tier: default_capability_tier(),
+        };
+        profile.apply_static_probes();
+        profile.recompute_tier();
+        profile
+    }
+
+    /// Refresh RAM/VRAM probes and recompute `tier` (sync, no host agent).
+    pub fn apply_static_probes(&mut self) {
+        if let Some(v) = env_f32("S2S_CAPABILITY_VRAM_TOTAL_GB") {
+            self.vram_total_gb = Some(v);
+        } else if self.vram_total_gb.is_none() {
+            self.vram_total_gb = probe_vram_total_gb();
+        }
+        if let Some(v) = env_f32("S2S_CAPABILITY_VRAM_FREE_GB") {
+            self.vram_free_gb = Some(v);
+        } else if self.vram_free_gb.is_none() {
+            self.vram_free_gb = probe_vram_free_gb();
+        }
+        if let Some(v) = env_f32("S2S_CAPABILITY_RAM_TOTAL_GB") {
+            self.ram_total_gb = Some(v);
+        } else {
+            self.ram_total_gb = probe_ram_total_gb().or(self.ram_total_gb);
+        }
+        if let Some(v) = env_f32("S2S_CAPABILITY_RAM_AVAILABLE_GB") {
+            self.ram_available_gb = Some(v);
+        } else {
+            self.ram_available_gb = probe_ram_available_gb().or(self.ram_available_gb);
+        }
+        self.recompute_tier();
+    }
+
+    /// Apply host-agent heartbeat (profiles + online flag) and recompute tier.
+    pub fn apply_host_agent(&mut self, online: bool, profiles: impl IntoIterator<Item = String>) {
+        self.host_agent_online = online;
+        self.host_profiles = profiles.into_iter().collect();
+        self.host_profiles.sort();
+        self.host_profiles.dedup();
+        self.recompute_tier();
+    }
+
+    pub fn recompute_tier(&mut self) {
+        if let Ok(forced) = std::env::var("S2S_CAPABILITY_TIER") {
+            let forced = forced.trim();
+            if !forced.is_empty() {
+                self.tier = forced.to_ascii_lowercase();
+                return;
+            }
+        }
+        self.tier = derive_capability_tier(self);
+    }
+}
+
+/// Derive capacity tier per `docs/aurago-integration.md` (`heuristic_v1`).
+pub fn derive_capability_tier(hw: &HardwareProfile) -> String {
+    let has_vulkan = hw.accelerators.iter().any(|a| a == "vulkan");
+    let has_cuda = hw.accelerators.iter().any(|a| a == "cuda");
+    let has_sycl = hw.accelerators.iter().any(|a| a == "sycl");
+    let vram = hw.vram_total_gb.or(hw.vram_free_gb);
+
+    if hw.host_agent_online && has_vulkan {
+        return "host-vulkan".into();
+    }
+    if vram.is_some_and(|g| g >= 14.0) {
+        return "gpu-16gb+".into();
+    }
+    if vram.is_some_and(|g| g >= 6.0) {
+        return "gpu-8gb".into();
+    }
+    // Accelerator present but VRAM unknown (typical Docker Desktop GPU passthrough gap).
+    if has_cuda || has_sycl || (has_vulkan && !hw.in_container) {
+        return "gpu-8gb".into();
+    }
+    if has_vulkan && hw.in_container {
+        // Lab often advertises vulkan via env without device access inside the container.
+        return "gpu-8gb".into();
+    }
+    "cpu-light".into()
+}
+
+fn env_f32(key: &str) -> Option<f32> {
+    std::env::var(key)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<f32>().ok())
+        .filter(|v| v.is_finite() && *v >= 0.0)
+}
+
+fn probe_vram_total_gb() -> Option<f32> {
+    probe_nvidia_smi_memory().map(|(total, _)| total)
+}
+
+fn probe_vram_free_gb() -> Option<f32> {
+    probe_nvidia_smi_memory().map(|(_, free)| free)
+}
+
+/// Returns `(total_gb, free_gb)` from `nvidia-smi` when available.
+fn probe_nvidia_smi_memory() -> Option<(f32, f32)> {
+    let output = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=memory.total,memory.free",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().next()?.trim();
+    let mut parts = line.split(',').map(str::trim);
+    let total_mib: f32 = parts.next()?.parse().ok()?;
+    let free_mib: f32 = parts.next()?.parse().ok()?;
+    Some((total_mib / 1024.0, free_mib / 1024.0))
+}
+
+fn probe_ram_total_gb() -> Option<f32> {
+    #[cfg(target_os = "linux")]
+    {
+        return parse_meminfo_kb("MemTotal:").map(|kb| kb / 1024.0 / 1024.0);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return windows_ram_gb().map(|(total, _)| total);
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        None
+    }
+}
+
+fn probe_ram_available_gb() -> Option<f32> {
+    #[cfg(target_os = "linux")]
+    {
+        // Prefer MemAvailable; fall back to MemFree.
+        return parse_meminfo_kb("MemAvailable:")
+            .or_else(|| parse_meminfo_kb("MemFree:"))
+            .map(|kb| kb / 1024.0 / 1024.0);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return windows_ram_gb().map(|(_, avail)| avail);
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_meminfo_kb(prefix: &str) -> Option<f32> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            let kb: f32 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb);
         }
     }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn windows_ram_gb() -> Option<(f32, f32)> {
+    // GlobalMemoryStatusEx via PowerShell keeps us free of extra crates.
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-CimInstance Win32_OperatingSystem | Select-Object -ExpandProperty TotalVisibleMemorySize),((Get-CimInstance Win32_OperatingSystem | Select-Object -ExpandProperty FreePhysicalMemory))",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut nums = text
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter_map(|s| s.trim().parse::<f32>().ok());
+    let total_kb = nums.next()?;
+    let free_kb = nums.next()?;
+    Some((total_kb / 1024.0 / 1024.0, free_kb / 1024.0 / 1024.0))
 }
 
 impl BackendCatalog {
@@ -298,6 +540,9 @@ impl BackendCatalog {
                     );
                 }
             }
+            if !backend.access_url.is_empty() {
+                validate_http_url(&backend.access_url)?;
+            }
             if !backend.bundled
                 && backend.artifacts.is_empty()
                 && backend
@@ -311,6 +556,23 @@ impl BackendCatalog {
                 );
             }
             validate_artifacts(&backend.id, &backend.artifacts)?;
+            if backend.access_url.is_empty()
+                && (backend
+                    .artifacts
+                    .iter()
+                    .any(|artifact| artifact.auth == "huggingface")
+                    || backend.variants.iter().any(|variant| {
+                        variant
+                            .artifacts
+                            .iter()
+                            .any(|artifact| artifact.auth == "huggingface")
+                    }))
+            {
+                bail!(
+                    "backend '{}' has authenticated artifacts but no access_url",
+                    backend.id
+                );
+            }
             for variant in &backend.variants {
                 validate_id(&variant.id, "variant")?;
                 if !variant_belongs_to_backend(&backend.id, &variant.id) {
@@ -420,6 +682,10 @@ impl BackendCatalog {
                 backend.bundled = bundled;
                 backend.artifacts = artifacts;
                 backend.protocol = protocol;
+                let auth_required = backend
+                    .artifacts
+                    .iter()
+                    .any(|artifact| artifact.auth == "huggingface");
                 CatalogBackendStatus {
                     installed: bundled,
                     download_state: if bundled {
@@ -442,6 +708,8 @@ impl BackendCatalog {
                         "not_managed".into()
                     },
                     runtime_reason: String::new(),
+                    auth_required,
+                    hf_token_configured: false,
                     backend,
                     available,
                     reason,
@@ -643,6 +911,27 @@ fn validate_artifacts(owner: &str, artifacts: &[ModelArtifact]) -> Result<()> {
         if !(artifact.source.starts_with("https://") || artifact.source.starts_with("http://")) {
             bail!("'{owner}' artifact source must be http(s)");
         }
+        if !artifact.auth.is_empty() && artifact.auth != "huggingface" {
+            bail!(
+                "'{owner}' artifact '{}' has unknown auth scheme '{}'",
+                artifact.path,
+                artifact.auth
+            );
+        }
+        if artifact.auth == "huggingface" {
+            if !artifact.source.starts_with("https://huggingface.co/") {
+                bail!(
+                    "'{owner}' authenticated artifact '{}' must use huggingface.co over HTTPS",
+                    artifact.path
+                );
+            }
+            if artifact.sha256.len() != 64 || artifact.size == 0 {
+                bail!(
+                    "'{owner}' authenticated artifact '{}' must pin size and SHA-256",
+                    artifact.path
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -684,11 +973,22 @@ pub fn is_known_host_profile(value: &str) -> bool {
         "crispasr-whisper"
             | "crispasr-parakeet"
             | "crispasr-voxtral"
+            | "crispasr-qwen3-asr"
+            | "crispasr-canary"
+            | "crispasr-funasr-mlt"
             | "crispasr-kokoro"
             | "crispasr-vibevoice"
+            | "crispasr-chatterbox"
+            | "crispasr-piper"
+            | "crispasr-cosyvoice3"
+            | "crispasr-omnivoice"
+            | "chatterbox-python"
+            | "inflect-python"
             | "llama-granite"
-            | "qwen-vulkan"
+            | "qwen-sycl"
             | "supertonic-webgpu"
+            | "xtts-webgpu"
+            | "xtts-cpu"
     )
 }
 
@@ -716,7 +1016,7 @@ mod tests {
     use super::*;
 
     fn hw(vendor: &str, accelerators: &[&str]) -> HardwareProfile {
-        HardwareProfile {
+        let mut profile = HardwareProfile {
             vendor: vendor.into(),
             device_name: if vendor == "intel" {
                 "Intel Arc B580".into()
@@ -727,7 +1027,52 @@ mod tests {
             platform: "linux".into(),
             in_container: true,
             allow_experimental: false,
-        }
+            vram_total_gb: None,
+            vram_free_gb: None,
+            ram_total_gb: None,
+            ram_available_gb: None,
+            host_agent_online: false,
+            host_profiles: Vec::new(),
+            tier: default_capability_tier(),
+        };
+        profile.recompute_tier();
+        profile
+    }
+
+    #[test]
+    fn capability_tier_cpu_light_by_default() {
+        let profile = hw("unknown", &["cpu"]);
+        assert_eq!(derive_capability_tier(&profile), "cpu-light");
+    }
+
+    #[test]
+    fn capability_tier_gpu_8gb_from_vram() {
+        let mut profile = hw("nvidia", &["cuda", "cpu"]);
+        profile.vram_total_gb = Some(8.0);
+        assert_eq!(derive_capability_tier(&profile), "gpu-8gb");
+        profile.vram_total_gb = Some(16.0);
+        assert_eq!(derive_capability_tier(&profile), "gpu-16gb+");
+    }
+
+    #[test]
+    fn capability_tier_host_vulkan_when_agent_online() {
+        let mut profile = hw("intel", &["vulkan", "cpu"]);
+        profile.host_agent_online = true;
+        assert_eq!(derive_capability_tier(&profile), "host-vulkan");
+    }
+
+    #[test]
+    fn capability_tier_unknown_vram_with_cuda_is_gpu_8gb() {
+        let profile = hw("nvidia", &["cuda", "cpu"]);
+        assert_eq!(derive_capability_tier(&profile), "gpu-8gb");
+    }
+
+    #[test]
+    fn capability_profile_serializes_tier() {
+        let profile = hw("intel", &["cpu"]);
+        let value = serde_json::to_value(&profile).unwrap();
+        assert_eq!(value["tier"], "cpu-light");
+        assert_eq!(value["host_agent_online"], false);
     }
 
     #[test]
@@ -765,10 +1110,10 @@ mod tests {
         let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
         let backend = catalog.find("qwen3-tts-0.6b").unwrap();
         assert_eq!(backend.default_voice, "Aiden");
+        assert_eq!(backend.voice_mode, VoiceMode::Request);
         assert_eq!(backend.voices.len(), 9);
         assert!(backend.voices.iter().any(|voice| voice == "Serena"));
         assert!(backend.voices.iter().any(|voice| voice == "Dylan"));
-        assert_eq!(backend.voice_mode, VoiceMode::Request);
     }
 
     #[test]
@@ -776,8 +1121,10 @@ mod tests {
         let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
         for id in [
             "qwen3-tts-0.6b",
+            "xtts-v2",
             "vibevoice-realtime-0.5b",
             "higgs-tts-3-4b",
+            "cosyvoice3-0.5b",
         ] {
             assert_eq!(
                 catalog.find(id).unwrap().voice_mode,
@@ -785,7 +1132,17 @@ mod tests {
                 "{id}"
             );
         }
-        for id in ["supertonic", "kokoro"] {
+        let piper = catalog.find("piper").unwrap();
+        assert_eq!(piper.voice_mode, VoiceMode::Restart);
+        assert_eq!(piper.default_voice, "thorsten");
+        assert_eq!(piper.voices, vec!["thorsten", "libritts"]);
+        for id in [
+            "supertonic",
+            "chatterbox-multilingual-v3",
+            "kokoro",
+            "omnivoice",
+            "inflect-micro-v2",
+        ] {
             let backend = catalog.find(id).unwrap();
             assert_eq!(backend.voice_mode, VoiceMode::Fixed, "{id}");
             assert!(!backend.default_voice.trim().is_empty(), "{id}");
@@ -795,26 +1152,22 @@ mod tests {
     #[test]
     fn missing_voice_mode_defaults_to_fixed_and_blank_tts_voice_is_rejected() {
         let mut value: serde_json::Value = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
-        let backend = value["backends"]
-            .as_array_mut()
-            .unwrap()
+        let backends = value["backends"].as_array_mut().unwrap();
+        let piper = backends
             .iter_mut()
-            .find(|backend| backend["id"] == "qwen3-tts-0.6b")
+            .find(|backend| backend["id"] == "piper")
             .unwrap();
-        backend.as_object_mut().unwrap().remove("voice_mode");
+        piper.as_object_mut().unwrap().remove("voice_mode");
         let catalog: BackendCatalog = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(
-            catalog.find("qwen3-tts-0.6b").unwrap().voice_mode,
-            VoiceMode::Fixed
-        );
+        assert_eq!(catalog.find("piper").unwrap().voice_mode, VoiceMode::Fixed);
 
-        let backend = value["backends"]
+        let piper = value["backends"]
             .as_array_mut()
             .unwrap()
             .iter_mut()
-            .find(|backend| backend["id"] == "qwen3-tts-0.6b")
+            .find(|backend| backend["id"] == "piper")
             .unwrap();
-        backend["default_voice"] = serde_json::Value::String(String::new());
+        piper["default_voice"] = serde_json::Value::String(String::new());
         let catalog: BackendCatalog = serde_json::from_value(value).unwrap();
         assert!(catalog
             .validate()
@@ -822,6 +1175,7 @@ mod tests {
             .to_string()
             .contains("default_voice"));
     }
+
     #[test]
     fn higgs_catalog_exposes_cuda_and_host_variants() {
         let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
@@ -882,6 +1236,18 @@ mod tests {
 
         let selected = resolve_variant(backend, &hardware).unwrap();
         assert_eq!(selected.id, "qwen3-tts-sycl-windows-experimental");
+        assert_eq!(selected.host_profile, "qwen-sycl");
+        assert_eq!(
+            selected.environment.get("GGML_BACKEND").map(String::as_str),
+            Some("SYCL0")
+        );
+        assert_eq!(
+            selected
+                .environment
+                .get("ONEAPI_DEVICE_SELECTOR")
+                .map(String::as_str),
+            Some("level_zero:0")
+        );
         assert_eq!(
             endpoint_for(selected, hardware.in_container),
             "http://host.docker.internal:8083/v1/audio/speech"
@@ -935,6 +1301,158 @@ mod tests {
     }
 
     #[test]
+    fn chatterbox_catalog_is_pinned_and_selects_windows_cpu_or_cuda() {
+        let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let backend = catalog.find("chatterbox-multilingual-v3").unwrap();
+        assert_eq!(backend.stage, BackendStage::Tts);
+        assert_eq!(backend.model, "ResembleAI/chatterbox");
+        assert_eq!(backend.default_voice, "default");
+        assert_eq!(backend.native_sample_rate, 24_000);
+        assert!(backend.languages.iter().any(|language| language == "de"));
+        assert_eq!(backend.artifacts.len(), 6);
+        assert!(backend.artifacts.iter().all(|artifact| {
+            artifact
+                .source
+                .contains("/resolve/5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18/")
+                && artifact.sha256.len() == 64
+                && artifact.size > 0
+        }));
+
+        let mut intel = hw("intel", &["cpu"]);
+        intel.platform = "windows".into();
+        intel.allow_experimental = true;
+        let cpu = resolve_variant(backend, &intel).expect("Windows CPU variant");
+        assert_eq!(cpu.id, "chatterbox-multilingual-v3-cpu-windows");
+        assert_eq!(cpu.host_profile, "chatterbox-python");
+        assert!(cpu.endpoint.contains("8090"));
+
+        let mut nvidia = hw("nvidia", &["cuda", "cpu"]);
+        nvidia.platform = "windows".into();
+        nvidia.allow_experimental = true;
+        let cuda = resolve_variant(backend, &nvidia).expect("Windows CUDA variant");
+        assert_eq!(cuda.id, "chatterbox-multilingual-v3-cuda-windows");
+        assert_eq!(cuda.host_profile, "chatterbox-python");
+    }
+
+    #[test]
+    fn chatterbox_vulkan_variant_is_pinned_and_b580_scoped() {
+        let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let backend = catalog.find("chatterbox-multilingual-v3").unwrap();
+        let variant = backend
+            .variants
+            .iter()
+            .find(|variant| variant.id == "chatterbox-multilingual-v3-vulkan-windows-b580")
+            .expect("Chatterbox Vulkan variant");
+
+        assert_eq!(variant.accelerator, "vulkan");
+        assert!(!variant.stable);
+        assert_eq!(variant.host_profile, "crispasr-chatterbox");
+        assert_eq!(variant.artifacts.len(), 2);
+        assert!(variant.artifacts.iter().all(|artifact| {
+            artifact
+                .source
+                .contains("/resolve/0295ba8dee365d84e5de44b818bb27ddfa705c43/")
+                && artifact.path.starts_with("chatterbox/")
+                && artifact.path.ends_with(".gguf")
+                && artifact.sha256.len() == 64
+                && artifact.size > 300_000_000
+        }));
+
+        let mut b580 = hw("intel", &["vulkan", "cpu"]);
+        b580.platform = "windows".into();
+        b580.device_name = "Intel Arc B580".into();
+        b580.allow_experimental = true;
+        let selected = resolve_variant(backend, &b580).expect("B580 Vulkan variant");
+        assert_eq!(selected.id, variant.id);
+
+        let mut other_intel = b580.clone();
+        other_intel.device_name = "Intel Arc A770".into();
+        assert_eq!(
+            resolve_variant(backend, &other_intel).map(|selected| selected.id.as_str()),
+            Some("chatterbox-multilingual-v3-cpu-windows")
+        );
+    }
+
+    #[test]
+    fn xtts_v2_catalog_is_pinned_gated_and_b580_scoped() {
+        let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let backend = catalog.find("xtts-v2").expect("XTTS-v2 backend");
+        assert_eq!(backend.stage, BackendStage::Tts);
+        assert_eq!(backend.model, "coqui/XTTS-v2");
+        assert_eq!(backend.default_voice, "de_sample");
+        assert_eq!(backend.native_sample_rate, 24_000);
+        assert_eq!(backend.languages.len(), 17);
+        assert!(backend.languages.iter().any(|language| language == "de"));
+        assert!(backend
+            .licenses
+            .iter()
+            .any(|license| license == "CC-BY-NC-4.0"));
+        assert!(backend.access_url.contains("XTTSv2-Streaming-ONNX"));
+        assert_eq!(backend.artifacts.len(), 11);
+        assert!(backend
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.sha256.len() == 64 && artifact.size > 0));
+        let gated: Vec<_> = backend
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.auth == "huggingface")
+            .collect();
+        assert_eq!(gated.len(), 9);
+        assert!(gated.iter().all(|artifact| artifact
+            .source
+            .contains("/resolve/975b202585dea4ae6ca7f6118121cdf1011d7d28/")));
+        assert!(!backend
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path.contains("int8")));
+
+        let mut b580 = hw("intel", &["vulkan", "cpu"]);
+        b580.platform = "windows".into();
+        assert!(resolve_variant(backend, &b580).is_none());
+        b580.allow_experimental = true;
+        let selected = resolve_variant(backend, &b580).expect("B580 WebGPU variant");
+        assert_eq!(selected.id, "xtts-v2-webgpu-vulkan-windows-b580");
+        assert_eq!(selected.host_profile, "xtts-webgpu");
+        assert!(selected.endpoint.contains("8091"));
+
+        let mut other_intel = b580.clone();
+        other_intel.device_name = "Intel Arc A770".into();
+        let fallback = resolve_variant(backend, &other_intel).expect("Windows CPU fallback");
+        assert_eq!(fallback.id, "xtts-v2-cpu-windows");
+        assert_eq!(fallback.host_profile, "xtts-cpu");
+    }
+
+    #[test]
+    fn authenticated_artifacts_require_huggingface_https_and_pins() {
+        let mut catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let artifact = catalog
+            .backends
+            .iter_mut()
+            .find(|backend| backend.id == "xtts-v2")
+            .unwrap()
+            .artifacts
+            .iter_mut()
+            .find(|artifact| artifact.auth == "huggingface")
+            .unwrap();
+        artifact.source = "https://example.invalid/model.onnx".into();
+        assert!(catalog.validate().is_err());
+
+        let mut catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let artifact = catalog
+            .backends
+            .iter_mut()
+            .find(|backend| backend.id == "xtts-v2")
+            .unwrap()
+            .artifacts
+            .iter_mut()
+            .find(|artifact| artifact.auth == "huggingface")
+            .unwrap();
+        artifact.auth = "basic".into();
+        assert!(catalog.validate().is_err());
+    }
+
+    #[test]
     fn voxtral_catalog_exposes_cuda_cpu_and_host() {
         let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
         let backend = catalog.find("voxtral-mini-4b-realtime").unwrap();
@@ -985,6 +1503,106 @@ mod tests {
         assert!(validate_artifact_path("C:\\escape.gguf").is_err());
         assert!(validate_artifact_path("/escape.gguf").is_err());
         assert!(validate_artifact_path("qwen/model.gguf").is_ok());
+    }
+
+    #[test]
+    fn multilingual_crispasr_backends_are_catalogued() {
+        let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        catalog
+            .validate()
+            .expect("catalog with multilingual backends");
+
+        let asr = [
+            (
+                "qwen3-asr-0.6b",
+                "crispasr-qwen3-asr",
+                "qwen3-asr/qwen3-asr-0.6b-q4_k.gguf",
+            ),
+            (
+                "canary-1b-v2",
+                "crispasr-canary",
+                "canary/canary-1b-v2-q4_k.gguf",
+            ),
+            (
+                "fun-asr-mlt-nano",
+                "crispasr-funasr-mlt",
+                "funasr/funasr-mlt-nano-2512-q4_k.gguf",
+            ),
+        ];
+        for (id, profile, model_path) in asr {
+            let backend = catalog.find(id).expect(id);
+            assert_eq!(backend.stage, BackendStage::Asr);
+            assert_eq!(backend.protocol, "whisper-cpp");
+            let cpu = backend
+                .variants
+                .iter()
+                .find(|v| v.id.ends_with("host-cpu"))
+                .expect("host-cpu variant");
+            assert!(cpu.stable);
+            assert_eq!(cpu.platforms, vec!["windows".to_string()]);
+            assert_eq!(cpu.host_profile, profile);
+            assert!(variant_artifacts(backend, cpu)
+                .iter()
+                .any(|a| a.path == model_path));
+            assert!(is_known_host_profile(profile));
+
+            // Host-only backends must not resolve on Linux (no host agent there).
+            let linux = hw("any", &["cpu"]);
+            assert!(resolve_variant(backend, &linux).is_none());
+        }
+
+        let tts = [
+            ("piper", "crispasr-piper", 8092),
+            ("cosyvoice3-0.5b", "crispasr-cosyvoice3", 8093),
+            ("omnivoice", "crispasr-omnivoice", 8094),
+        ];
+        for (id, profile, port) in tts {
+            let backend = catalog.find(id).expect(id);
+            assert_eq!(backend.stage, BackendStage::Tts);
+            assert_eq!(backend.protocol, "openai-tts");
+            let cpu = backend
+                .variants
+                .iter()
+                .find(|v| v.id.ends_with("host-cpu"))
+                .expect("host-cpu variant");
+            assert_eq!(cpu.platforms, vec!["windows".to_string()]);
+            assert_eq!(cpu.host_profile, profile);
+            assert!(cpu.native_endpoint.contains(&port.to_string()));
+            assert!(is_known_host_profile(profile));
+        }
+
+        assert!(catalog.presets.iter().any(|p| p.id == "multilingual-8gb"
+            && p.asr_id == "qwen3-asr-0.6b"
+            && p.tts_id == "piper"
+            && p.llm_id == "local-fallback"));
+    }
+
+    #[test]
+    fn inflect_micro_catalog_is_windows_host_cpu() {
+        let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let backend = catalog.find("inflect-micro-v2").expect("inflect-micro-v2");
+        assert_eq!(backend.stage, BackendStage::Tts);
+        assert_eq!(backend.protocol, "openai-tts");
+        assert_eq!(backend.languages, vec!["en".to_string()]);
+        assert_eq!(backend.native_sample_rate, 24_000);
+        let cpu = backend
+            .variants
+            .iter()
+            .find(|v| v.id == "inflect-micro-v2-host-cpu")
+            .expect("host-cpu");
+        assert!(cpu.stable);
+        assert_eq!(cpu.platforms, vec!["windows".to_string()]);
+        assert_eq!(cpu.host_profile, "inflect-python");
+        assert!(is_known_host_profile("inflect-python"));
+        assert!(variant_artifacts(backend, cpu)
+            .iter()
+            .any(|a| a.path == "inflect-micro-v2/model.pth" && a.size == 37_529_995));
+        let linux = hw("any", &["cpu"]);
+        assert!(resolve_variant(backend, &linux).is_none());
+        assert!(catalog
+            .presets
+            .iter()
+            .any(|p| p.id == "english-compact" && p.tts_id == "inflect-micro-v2"));
     }
 
     #[test]
@@ -1056,19 +1674,34 @@ mod tests {
                 "voxtral-mini-4b-realtime-vulkan-windows-b580",
             ),
             ("supertonic", "supertonic-webgpu-vulkan-windows-b580"),
-            ("qwen3-tts-0.6b", "qwen3-tts-vulkan-windows-b580"),
+            (
+                "chatterbox-multilingual-v3",
+                "chatterbox-multilingual-v3-vulkan-windows-b580",
+            ),
+            ("xtts-v2", "xtts-v2-webgpu-vulkan-windows-b580"),
             ("kokoro", "kokoro-vulkan-windows-b580"),
             (
                 "vibevoice-realtime-0.5b",
                 "vibevoice-realtime-0.5b-vulkan-windows-b580",
             ),
             ("local-fallback", "local-fallback-vulkan-windows-b580"),
+            ("qwen3-asr-0.6b", "qwen3-asr-0.6b-vulkan-windows-b580"),
+            ("canary-1b-v2", "canary-1b-v2-vulkan-windows-b580"),
+            ("fun-asr-mlt-nano", "fun-asr-mlt-nano-vulkan-windows-b580"),
+            ("piper", "piper-vulkan-windows-b580"),
+            ("cosyvoice3-0.5b", "cosyvoice3-0.5b-vulkan-windows-b580"),
+            ("omnivoice", "omnivoice-vulkan-windows-b580"),
         ];
         for (backend_id, variant_id) in expected {
             let selected = resolve_variant(catalog.find(backend_id).unwrap(), &hardware).unwrap();
             assert_eq!(selected.id, variant_id);
             assert!(!selected.host_profile.is_empty());
         }
+
+        hardware.accelerators.push("sycl".into());
+        let qwen = resolve_variant(catalog.find("qwen3-tts-0.6b").unwrap(), &hardware).unwrap();
+        assert_eq!(qwen.id, "qwen3-tts-sycl-windows-experimental");
+        assert_eq!(qwen.host_profile, "qwen-sycl");
     }
 
     #[test]

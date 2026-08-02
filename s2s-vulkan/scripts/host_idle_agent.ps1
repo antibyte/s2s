@@ -1,4 +1,4 @@
-# Windows host supervisor for Vulkan inference backends.
+# Windows host supervisor for native Vulkan and SYCL inference backends.
 #
 # The Linux Docker Desktop VM cannot use an Intel Arc Vulkan device directly.
 # This agent watches the shared data directory, accepts only schema-validated
@@ -11,8 +11,12 @@
 # Executable overrides:
 #   S2S_HOST_CRISPASR_EXE
 #   S2S_HOST_LLAMA_EXE
-#   S2S_HOST_QWEN_EXE
+#   S2S_HOST_QWEN_SYCL_EXE
 #   S2S_HOST_SUPERTONIC_EXE
+#   S2S_HOST_CHATTERBOX_PYTHON
+#   S2S_HOST_XTTS_PYTHON
+#   S2S_HOST_INFLECT_PYTHON
+#   S2S_ONEAPI_ROOT
 #
 # Compatibility: idle-unload.request and idle-reload.request are still handled.
 
@@ -23,8 +27,8 @@ param(
     [string]$Volume = "",
     [ValidateRange(1, 60)]
     [int]$PollSeconds = 2,
-    [ValidateRange(0, 31)]
-    [int]$VulkanDevice = 0,
+    [ValidateRange(-1, 31)]
+    [int]$VulkanDevice = -1,
     [switch]$Once
 )
 
@@ -32,6 +36,7 @@ $ErrorActionPreference = "Stop"
 $Script:SchemaVersion = 2
 $Script:AgentVersion = "2.1.0"
 $Script:Root = Split-Path -Parent $PSScriptRoot
+$Script:ResolvedVulkanDevice = if ($VulkanDevice -ge 0) { $VulkanDevice } else { 0 }
 $Script:AllowedStages = @("asr", "tts", "llm")
 $Script:AllowedDockerContainers = @(
     "s2s-tts-vibevoice",
@@ -91,18 +96,72 @@ function Get-ConfiguredExecutable {
     return [IO.Path]::GetFullPath($configured)
 }
 
+function Get-OneApiEnvironment {
+    $oneApiRoot = if ($env:S2S_ONEAPI_ROOT) {
+        $env:S2S_ONEAPI_ROOT
+    } elseif ($env:ONEAPI_ROOT) {
+        $env:ONEAPI_ROOT
+    } else {
+        @(
+            "D:\Intel\oneAPI",
+            "E:\Intel\oneAPI",
+            "C:\Program Files (x86)\Intel\oneAPI",
+            "C:\Program Files\Intel\oneAPI"
+        ) | Where-Object { Test-Path -LiteralPath (Join-Path $_ "setvars.bat") } |
+            Select-Object -First 1
+    }
+    if ([string]::IsNullOrWhiteSpace($oneApiRoot)) {
+        throw "oneAPI runtime not found; set S2S_ONEAPI_ROOT"
+    }
+    $setvars = [IO.Path]::GetFullPath((Join-Path $oneApiRoot "setvars.bat"))
+    if (-not (Test-Path -LiteralPath $setvars -PathType Leaf)) {
+        throw "oneAPI setvars.bat missing: $setvars"
+    }
+
+    $command = "call `"$setvars`" --force >nul && set"
+    $lines = & $env:ComSpec /d /s /c $command
+    if ($LASTEXITCODE -ne 0) {
+        throw "oneAPI setvars.bat failed with exit code $LASTEXITCODE"
+    }
+    $environment = @{}
+    foreach ($line in $lines) {
+        $separator = $line.IndexOf("=")
+        if ($separator -le 0) {
+            continue
+        }
+        $name = $line.Substring(0, $separator)
+        if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') {
+            continue
+        }
+        $environment[$name] = $line.Substring($separator + 1)
+    }
+    if (-not $environment.ContainsKey("Path")) {
+        throw "oneAPI setvars.bat did not return PATH"
+    }
+    return $environment
+}
+
 $Script:CrispAsrExe = Get-ConfiguredExecutable `
     -EnvironmentName "S2S_HOST_CRISPASR_EXE" `
     -DefaultPath (Join-Path $Script:Root "tools\CrispASR\build-vulkan\bin\crispasr.exe")
 $Script:LlamaExe = Get-ConfiguredExecutable `
     -EnvironmentName "S2S_HOST_LLAMA_EXE" `
     -DefaultPath (Join-Path $Script:Root "tools\llama.cpp\build\bin\Release\llama-server.exe")
-$Script:QwenExe = Get-ConfiguredExecutable `
-    -EnvironmentName "S2S_HOST_QWEN_EXE" `
-    -DefaultPath (Join-Path $Script:Root "tools\qwentts\build-vulkan\bin\Release\tts-server.exe")
+$Script:QwenSyclExe = Get-ConfiguredExecutable `
+    -EnvironmentName "S2S_HOST_QWEN_SYCL_EXE" `
+    -DefaultPath (Join-Path $Script:Root "tools\qwentts\build-sycl\bin\Release\tts-server.exe")
 $Script:SupertonicExe = Get-ConfiguredExecutable `
     -EnvironmentName "S2S_HOST_SUPERTONIC_EXE" `
     -DefaultPath (Join-Path $Script:Root "target\release\s2s-vulkan.exe")
+$Script:ChatterboxPython = Get-ConfiguredExecutable `
+    -EnvironmentName "S2S_HOST_CHATTERBOX_PYTHON" `
+    -DefaultPath (Join-Path $Script:Root "tools\chatterbox\.venv\Scripts\python.exe")
+$Script:XTTSPython = Get-ConfiguredExecutable `
+    -EnvironmentName "S2S_HOST_XTTS_PYTHON" `
+    -DefaultPath (Join-Path $Script:Root "tools\xtts-v2\.venv\Scripts\python.exe")
+$Script:InflectPython = Get-ConfiguredExecutable `
+    -EnvironmentName "S2S_HOST_INFLECT_PYTHON" `
+    -DefaultPath (Join-Path $Script:Root "tools\inflect\.venv\Scripts\python.exe")
 
 function New-Profile {
     param(
@@ -144,6 +203,30 @@ $Script:Profiles = @{
         -Executable $Script:CrispAsrExe `
         -BackendIds @("voxtral-mini-4b-realtime") `
         -VariantIds @("voxtral-mini-4b-realtime-vulkan-windows-b580")
+    "crispasr-qwen3-asr" = New-Profile `
+        -Name "crispasr-qwen3-asr" -Stage "asr" -Port 8082 `
+        -Executable $Script:CrispAsrExe `
+        -BackendIds @("qwen3-asr-0.6b") `
+        -VariantIds @(
+            "qwen3-asr-0.6b-host-cpu",
+            "qwen3-asr-0.6b-vulkan-windows-b580"
+        )
+    "crispasr-canary" = New-Profile `
+        -Name "crispasr-canary" -Stage "asr" -Port 8082 `
+        -Executable $Script:CrispAsrExe `
+        -BackendIds @("canary-1b-v2") `
+        -VariantIds @(
+            "canary-1b-v2-host-cpu",
+            "canary-1b-v2-vulkan-windows-b580"
+        )
+    "crispasr-funasr-mlt" = New-Profile `
+        -Name "crispasr-funasr-mlt" -Stage "asr" -Port 8082 `
+        -Executable $Script:CrispAsrExe `
+        -BackendIds @("fun-asr-mlt-nano") `
+        -VariantIds @(
+            "fun-asr-mlt-nano-host-cpu",
+            "fun-asr-mlt-nano-vulkan-windows-b580"
+        )
     "crispasr-kokoro" = New-Profile `
         -Name "crispasr-kokoro" -Stage "tts" -Port 8084 `
         -Executable $Script:CrispAsrExe `
@@ -154,6 +237,11 @@ $Script:Profiles = @{
         -Executable $Script:CrispAsrExe `
         -BackendIds @("vibevoice-realtime-0.5b") `
         -VariantIds @("vibevoice-realtime-0.5b-vulkan-windows-b580")
+    "crispasr-chatterbox" = New-Profile `
+        -Name "crispasr-chatterbox" -Stage "tts" -Port 8090 `
+        -Executable $Script:CrispAsrExe `
+        -BackendIds @("chatterbox-multilingual-v3") `
+        -VariantIds @("chatterbox-multilingual-v3-vulkan-windows-b580")
     "crispasr-piper" = New-Profile `
         -Name "crispasr-piper" -Stage "tts" -Port 8092 `
         -Executable $Script:CrispAsrExe `
@@ -161,16 +249,59 @@ $Script:Profiles = @{
         -VariantIds @(
             "piper-host-cpu",
             "piper-vulkan-windows-b580"
-        )    "llama-granite" = New-Profile `
+        )
+    "crispasr-cosyvoice3" = New-Profile `
+        -Name "crispasr-cosyvoice3" -Stage "tts" -Port 8093 `
+        -Executable $Script:CrispAsrExe `
+        -BackendIds @("cosyvoice3-0.5b") `
+        -VariantIds @(
+            "cosyvoice3-0.5b-host-cpu",
+            "cosyvoice3-0.5b-vulkan-windows-b580"
+        )
+    "crispasr-omnivoice" = New-Profile `
+        -Name "crispasr-omnivoice" -Stage "tts" -Port 8094 `
+        -Executable $Script:CrispAsrExe `
+        -BackendIds @("omnivoice") `
+        -VariantIds @(
+            "omnivoice-host-cpu",
+            "omnivoice-vulkan-windows-b580"
+        )
+    "chatterbox-python" = New-Profile `
+        -Name "chatterbox-python" -Stage "tts" -Port 8090 `
+        -Executable $Script:ChatterboxPython `
+        -BackendIds @("chatterbox-multilingual-v3") `
+        -VariantIds @(
+            "chatterbox-multilingual-v3-cpu-windows",
+            "chatterbox-multilingual-v3-cuda-windows"
+        )
+    "xtts-webgpu" = New-Profile `
+        -Name "xtts-webgpu" -Stage "tts" -Port 8091 `
+        -Executable $Script:XTTSPython `
+        -BackendIds @("xtts-v2") `
+        -VariantIds @("xtts-v2-webgpu-vulkan-windows-b580")
+    "xtts-cpu" = New-Profile `
+        -Name "xtts-cpu" -Stage "tts" -Port 8091 `
+        -Executable $Script:XTTSPython `
+        -BackendIds @("xtts-v2") `
+        -VariantIds @("xtts-v2-cpu-windows")
+    "inflect-python" = New-Profile `
+        -Name "inflect-python" -Stage "tts" -Port 8095 `
+        -Executable $Script:InflectPython `
+        -BackendIds @("inflect-micro-v2") `
+        -VariantIds @(
+            "inflect-micro-v2-host-cpu",
+            "inflect-micro-v2-host-cuda"
+        )
+    "llama-granite" = New-Profile `
         -Name "llama-granite" -Stage "llm" -Port 8081 `
         -Executable $Script:LlamaExe `
         -BackendIds @("local-fallback") `
         -VariantIds @("local-fallback-vulkan-windows-b580")
-    "qwen-vulkan" = New-Profile `
-        -Name "qwen-vulkan" -Stage "tts" -Port 8083 `
-        -Executable $Script:QwenExe `
+    "qwen-sycl" = New-Profile `
+        -Name "qwen-sycl" -Stage "tts" -Port 8083 `
+        -Executable $Script:QwenSyclExe `
         -BackendIds @("qwen3-tts-0.6b") `
-        -VariantIds @("qwen3-tts-vulkan-windows-b580")
+        -VariantIds @("qwen3-tts-sycl-windows-experimental")
     "supertonic-webgpu" = New-Profile `
         -Name "supertonic-webgpu" -Stage "tts" -Port 8085 `
         -Executable $Script:SupertonicExe `
@@ -228,6 +359,7 @@ function Get-VulkanStatus {
         return [pscustomobject]@{
             available = $assumeVulkan
             device_name = if ($forcedName) { $forcedName } else { "" }
+            device_index = $Script:ResolvedVulkanDevice
         }
     }
 
@@ -236,22 +368,66 @@ function Get-VulkanStatus {
         return [pscustomobject]@{
             available = $assumeVulkan
             device_name = if ($forcedName) { $forcedName } else { "" }
+            device_index = $Script:ResolvedVulkanDevice
         }
     }
-    $deviceName = $forcedName
-    if (-not $deviceName -and $output -match "(?im)^\s*deviceName\s*=\s*(.+?)\s*$") {
-        $deviceName = $Matches[1].Trim()
+    $devices = @()
+    $currentDevice = $null
+    foreach ($line in ($output -split "\r?\n")) {
+        if ($line -match "^\s*GPU(?<index>\d+):\s*$") {
+            if ($currentDevice -and $currentDevice.name) {
+                $devices += [pscustomobject]$currentDevice
+            }
+            $currentDevice = [ordered]@{
+                index = [int]$Matches["index"]
+                type = ""
+                name = ""
+            }
+        } elseif ($currentDevice -and $line -match "^\s*deviceType\s*=\s*(.+?)\s*$") {
+            $currentDevice.type = $Matches[1].Trim()
+        } elseif ($currentDevice -and $line -match "^\s*deviceName\s*=\s*(.+?)\s*$") {
+            $currentDevice.name = $Matches[1].Trim()
+        }
+    }
+    if ($currentDevice -and $currentDevice.name) {
+        $devices += [pscustomobject]$currentDevice
+    }
+
+    $selectedDevice = $null
+    if ($VulkanDevice -ge 0) {
+        $selectedDevice = $devices |
+            Where-Object { $_.index -eq $VulkanDevice } |
+            Select-Object -First 1
+    } else {
+        $selectedDevice = $devices |
+            Where-Object { $_.type -eq "PHYSICAL_DEVICE_TYPE_DISCRETE_GPU" } |
+            Select-Object -First 1
+        if (-not $selectedDevice) {
+            $selectedDevice = $devices | Select-Object -First 1
+        }
+    }
+
+    if ($selectedDevice) {
+        $Script:ResolvedVulkanDevice = [int]$selectedDevice.index
+    }
+    $deviceName = if ($forcedName) {
+        $forcedName
+    } elseif ($selectedDevice) {
+        [string]$selectedDevice.name
+    } else {
+        "Vulkan device $($Script:ResolvedVulkanDevice)"
     }
     return [pscustomobject]@{
         available = $true
-        device_name = if ($deviceName) { $deviceName } else { "Vulkan device $VulkanDevice" }
+        device_name = $deviceName
+        device_index = $Script:ResolvedVulkanDevice
     }
 }
 
 function Get-ProcessExecutable {
-    param([int]$Pid)
+    param([int]$ProcessId)
     try {
-        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$Pid" -ErrorAction Stop
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction Stop
         if ($process) {
             return [string]$process.ExecutablePath
         }
@@ -266,7 +442,7 @@ function Test-OwnedProcessAlive {
     if (-not $OwnedProcess -or -not $OwnedProcess.pid) {
         return $false
     }
-    $actual = Get-ProcessExecutable -Pid ([int]$OwnedProcess.pid)
+    $actual = Get-ProcessExecutable -ProcessId ([int]$OwnedProcess.pid)
     if (-not $actual) {
         return $false
     }
@@ -400,17 +576,20 @@ function Get-LaunchSpec {
         [Parameter(Mandatory = $true)]$Profile,
         [Parameter(Mandatory = $true)]$Command
     )
+    $vulkanStatus = Get-VulkanStatus
+    $effectiveVulkanDevice = [int]$vulkanStatus.device_index
     $commonCrisp = @(
         "--server",
         "--gpu-backend", "vulkan",
-        "-dev", "$VulkanDevice",
+        "-dev", "$effectiveVulkanDevice",
         "--host", "127.0.0.1",
         "--port", "$($Profile.port)"
     )
     switch ([string]$Profile.name) {
         "crispasr-whisper" {
             $model = Get-WhisperModel -BackendId ([string]$Command.backend_id)
-            $args = @("--server", "-m", $model, "--gpu-backend", "vulkan", "-dev", "$VulkanDevice",
+            $args = @("--server", "-m", $model, "--gpu-backend", "vulkan",
+                "-dev", "$effectiveVulkanDevice",
                 "--host", "127.0.0.1", "--port", "$($Profile.port)", "-l", "de")
             return [pscustomobject]@{ arguments = $args; environment = @{} }
         }
@@ -429,6 +608,37 @@ function Get-LaunchSpec {
                 environment = @{}
             }
         }
+        "crispasr-qwen3-asr" {
+            $model = Resolve-ModelPath "qwen3-asr\qwen3-asr-0.6b-q4_k.gguf"
+            $useVulkan = [string]$Command.variant_id -like "*-vulkan-*"
+            # -l auto: multilingual backends; per-request language still wins.
+            $args = @("--server", "--backend", "qwen3", "-m", $model, "-l", "auto",
+                "--host", "127.0.0.1", "--port", "$($Profile.port)")
+            if ($useVulkan) {
+                $args += @("--gpu-backend", "vulkan", "-dev", "$effectiveVulkanDevice")
+            }
+            return [pscustomobject]@{ arguments = $args; environment = @{} }
+        }
+        "crispasr-canary" {
+            $model = Resolve-ModelPath "canary\canary-1b-v2-q4_k.gguf"
+            $useVulkan = [string]$Command.variant_id -like "*-vulkan-*"
+            $args = @("--server", "--backend", "canary", "-m", $model, "-l", "auto",
+                "--host", "127.0.0.1", "--port", "$($Profile.port)")
+            if ($useVulkan) {
+                $args += @("--gpu-backend", "vulkan", "-dev", "$effectiveVulkanDevice")
+            }
+            return [pscustomobject]@{ arguments = $args; environment = @{} }
+        }
+        "crispasr-funasr-mlt" {
+            $model = Resolve-ModelPath "funasr\funasr-mlt-nano-2512-q4_k.gguf"
+            $useVulkan = [string]$Command.variant_id -like "*-vulkan-*"
+            $args = @("--server", "--backend", "fun-asr-mlt-nano", "-m", $model, "-l", "auto",
+                "--host", "127.0.0.1", "--port", "$($Profile.port)")
+            if ($useVulkan) {
+                $args += @("--gpu-backend", "vulkan", "-dev", "$effectiveVulkanDevice")
+            }
+            return [pscustomobject]@{ arguments = $args; environment = @{} }
+        }
         "crispasr-kokoro" {
             $model = Resolve-ModelPath "kokoro-gguf\kokoro-82m-q8_0.gguf"
             $voice = Resolve-ModelPath "kokoro-gguf\kokoro-voice-df_victoria.gguf"
@@ -437,7 +647,7 @@ function Get-LaunchSpec {
                     "--server", "--backend", "kokoro", "-m", $model,
                     "--voice", $voice, "-l", "de"
                 ) + $commonCrisp[1..($commonCrisp.Count - 1)]
-                environment = @{}
+                environment = @{ CRISPASR_KOKORO_GEN_GPU = "1" }
             }
         }
         "crispasr-vibevoice" {
@@ -452,22 +662,209 @@ function Get-LaunchSpec {
                 environment = @{}
             }
         }
+        "crispasr-chatterbox" {
+            $model = Resolve-ModelPath "chatterbox\chatterbox-t3-q8_0.gguf"
+            $codec = Resolve-ModelPath "chatterbox\chatterbox-s3gen-q8_0.gguf"
+            return [pscustomobject]@{
+                arguments = @(
+                    "--server", "--backend", "chatterbox", "-m", $model,
+                    "--codec-model", $codec, "-l", "de", "--tts-steps", "10"
+                ) + $commonCrisp[1..($commonCrisp.Count - 1)]
+                environment = @{
+                    CRISPASR_CHATTERBOX_T3_GPU = "0"
+                    CRISPASR_CHATTERBOX_FORCE_GPU = "0"
+                    CRISPASR_CHATTERBOX_FULL_CPU = "0"
+                }
+            }
+        }
         "crispasr-piper" {
-            # The allowlisted GGUF is the effective voice; arbitrary model paths are forbidden.
+            # Model GGUF *is* the voice; do not pass a separate --voice name.
             $model = switch ([string]$Command.voice) {
                 "thorsten" { Resolve-ModelPath "piper\piper-de_DE-thorsten-medium-f16.gguf" }
                 "libritts" { Resolve-ModelPath "piper\piper-en_US-libritts_r-medium-f16.gguf" }
                 default { throw "Piper voice '$($Command.voice)' is not allowlisted" }
             }
+            $useVulkan = [string]$Command.variant_id -like "*-vulkan-*"
             $args = @(
                 "--server", "--backend", "piper", "-m", $model, "-l", "auto",
                 "--host", "127.0.0.1", "--port", "$($Profile.port)"
             )
-            if ([string]$Command.variant_id -like "*-vulkan-*") {
-                $args += @("--gpu-backend", "vulkan", "-dev", "$VulkanDevice")
+            if ($useVulkan) {
+                $args += @("--gpu-backend", "vulkan", "-dev", "$effectiveVulkanDevice")
             }
             return [pscustomobject]@{ arguments = $args; environment = @{} }
-        }        "llama-granite" {
+        }
+        "crispasr-cosyvoice3" {
+            $model = Resolve-ModelPath "cosyvoice3\cosyvoice3-llm-q4_k.gguf"
+            foreach ($name in @(
+                "cosyvoice3-flow-q8_0.gguf",
+                "cosyvoice3-hift-f16.gguf",
+                "cosyvoice3-s3tok-q4_k.gguf",
+                "cosyvoice3-campplus-f16.gguf",
+                "cosyvoice3-voices.gguf"
+            )) {
+                Resolve-ModelPath "cosyvoice3\$name" | Out-Null
+            }
+            $useVulkan = [string]$Command.variant_id -like "*-vulkan-*"
+            $args = @(
+                "--server", "--backend", "cosyvoice3-tts", "-m", $model,
+                "--voice", "fleurs-de", "-l", "auto",
+                "--host", "127.0.0.1", "--port", "$($Profile.port)"
+            )
+            if ($useVulkan) {
+                $args += @("--gpu-backend", "vulkan", "-dev", "$effectiveVulkanDevice")
+            }
+            return [pscustomobject]@{ arguments = $args; environment = @{} }
+        }
+        "crispasr-omnivoice" {
+            # Zero-shot cloning backend: no baked OpenAI voice name. Speak with
+            # the loaded GGUF defaults; attach --voice <wav> later for cloning.
+            $model = Resolve-ModelPath "omnivoice\omnivoice-q4_k.gguf"
+            $codec = Resolve-ModelPath "omnivoice\omnivoice-tokenizer-q8_0.gguf"
+            $useVulkan = [string]$Command.variant_id -like "*-vulkan-*"
+            $args = @(
+                "--server", "--backend", "omnivoice", "-m", $model,
+                "--codec-model", $codec, "-l", "auto",
+                "--host", "127.0.0.1", "--port", "$($Profile.port)"
+            )
+            if ($useVulkan) {
+                $args += @("--gpu-backend", "vulkan", "-dev", "$effectiveVulkanDevice")
+            }
+            return [pscustomobject]@{ arguments = $args; environment = @{} }
+        }
+        "chatterbox-python" {
+            $modelDir = Split-Path -Parent (Resolve-ModelPath "chatterbox\ve.pt")
+            foreach ($name in @(
+                "t3_mtl23ls_v3.safetensors",
+                "s3gen.pt",
+                "grapheme_mtl_merged_expanded_v1.json",
+                "conds.pt",
+                "Cangjie5_TC.json"
+            )) {
+                Resolve-ModelPath "chatterbox\$name" | Out-Null
+            }
+            $serverScript = [IO.Path]::GetFullPath(
+                (Join-Path $PSScriptRoot "tts_chatterbox_server.py")
+            )
+            if (-not (Test-Path -LiteralPath $serverScript -PathType Leaf)) {
+                throw "Chatterbox server script is missing: $serverScript"
+            }
+            $device = if (
+                [string]$Command.variant_id -eq "chatterbox-multilingual-v3-cuda-windows"
+            ) {
+                "cuda"
+            } else {
+                "cpu"
+            }
+            return [pscustomobject]@{
+                arguments = @(
+                    $serverScript,
+                    "--model-dir", $modelDir,
+                    "--device", $device,
+                    "--host", "127.0.0.1",
+                    "--port", "$($Profile.port)"
+                )
+                environment = @{
+                    HF_HUB_OFFLINE = "1"
+                    PYTHONUNBUFFERED = "1"
+                    PYTHONUTF8 = "1"
+                    TOKENIZERS_PARALLELISM = "false"
+                }
+            }
+        }
+        "inflect-python" {
+            $modelDir = Split-Path -Parent (Resolve-ModelPath "inflect-micro-v2\model.pth")
+            Resolve-ModelPath "inflect-micro-v2\config.json" | Out-Null
+            Resolve-ModelPath "inflect-micro-v2\inference.py" | Out-Null
+            $serverScript = [IO.Path]::GetFullPath(
+                (Join-Path $PSScriptRoot "tts_inflect_server.py")
+            )
+            if (-not (Test-Path -LiteralPath $serverScript -PathType Leaf)) {
+                throw "Inflect server script is missing: $serverScript"
+            }
+            $device = if ([string]$Command.variant_id -like "*-cuda*") {
+                "cuda"
+            } else {
+                "cpu"
+            }
+            return [pscustomobject]@{
+                arguments = @(
+                    $serverScript,
+                    "--model-dir", $modelDir,
+                    "--device", $device,
+                    "--host", "127.0.0.1",
+                    "--port", "$($Profile.port)"
+                )
+                environment = @{
+                    S2S_INFLECT_MODEL_DIR = $modelDir
+                    S2S_INFLECT_DEVICE = $device
+                    PYTHONUNBUFFERED = "1"
+                    PYTHONUTF8 = "1"
+                }
+            }
+        }
+        { $_ -in @("xtts-webgpu", "xtts-cpu") } {
+            $modelDir = Split-Path -Parent (Resolve-ModelPath "xtts-v2\onnx\gpt_model.onnx")
+            foreach ($name in @(
+                "metadata.json",
+                "vocab.json",
+                "mel_stats.npy",
+                "conditioning_encoder.onnx",
+                "speaker_encoder.onnx",
+                "hifigan_vocoder.onnx",
+                "embeddings\mel_embedding.npy",
+                "embeddings\mel_pos_embedding.npy",
+                "embeddings\text_embedding.npy",
+                "embeddings\text_pos_embedding.npy"
+            )) {
+                Resolve-ModelPath "xtts-v2\onnx\$name" | Out-Null
+            }
+            $voicesDir = Split-Path -Parent (Resolve-ModelPath "xtts-v2\voices\de_sample.wav")
+            $serverScript = [IO.Path]::GetFullPath(
+                (Join-Path $PSScriptRoot "tts_xtts_v2_server.py")
+            )
+            $upstreamDir = [IO.Path]::GetFullPath(
+                (Join-Path $Script:Root "tools\xtts-v2\upstream")
+            )
+            if (-not (Test-Path -LiteralPath $serverScript -PathType Leaf)) {
+                throw "XTTS-v2 server script is missing: $serverScript"
+            }
+            foreach ($name in @(
+                "xtts_streaming_pipeline.py",
+                "xtts_onnx_orchestrator.py",
+                "xtts_tokenizer.py",
+                "zh_num2words.py"
+            )) {
+                $sourcePath = Join-Path $upstreamDir $name
+                if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+                    throw "XTTS-v2 pinned runtime source is missing: $sourcePath"
+                }
+            }
+            $mode = if ([string]$Profile.name -eq "xtts-webgpu") {
+                "webgpu-vulkan"
+            } else {
+                "cpu"
+            }
+            return [pscustomobject]@{
+                arguments = @(
+                    $serverScript,
+                    "--model-dir", $modelDir,
+                    "--voices-dir", $voicesDir,
+                    "--upstream-dir", $upstreamDir,
+                    "--mode", $mode,
+                    "--default-language", "de",
+                    "--host", "127.0.0.1",
+                    "--port", "$($Profile.port)"
+                )
+                environment = @{
+                    HF_HUB_OFFLINE = "1"
+                    PYTHONUNBUFFERED = "1"
+                    PYTHONUTF8 = "1"
+                    TOKENIZERS_PARALLELISM = "false"
+                }
+            }
+        }
+        "llama-granite" {
             $model = Resolve-ModelPath "granite\granite-3.3-2b-instruct-q4_k_m.gguf"
             return [pscustomobject]@{
                 arguments = @(
@@ -477,22 +874,28 @@ function Get-LaunchSpec {
                 environment = @{ GGML_BACKEND = "Vulkan0" }
             }
         }
-        "qwen-vulkan" {
+        "qwen-sycl" {
             $model = Resolve-ModelPath "qwen\qwen-talker-0.6b-customvoice-Q4_K_M.gguf"
             $codec = Resolve-ModelPath "qwen\qwen-tokenizer-12hz-Q8_0.gguf"
+            $environment = Get-OneApiEnvironment
+            $environment["GGML_BACKEND"] = "SYCL0"
+            $environment["ONEAPI_DEVICE_SELECTOR"] = "level_zero:0"
+            $environment["GGML_SYCL_ENABLE_FLASH_ATTN"] = "1"
+            $environment["GGML_SYCL_DISABLE_GRAPH"] = "1"
+            $environment["GGML_SYCL_PRIORITIZE_DMMV"] = "1"
+            $environment["GGML_SYCL_DEV2DEV_MEMCPY"] = "0"
+            $environment["GGML_SYCL_DISABLE_OPT"] = "0"
+            $environment["GGML_SYCL_DISABLE_DNN"] = "0"
+            $environment["GGML_SYCL_USE_LEVEL_ZERO_API"] = "1"
+            $environment["QWEN_CODE_SAMPLER"] = "host"
+            $environment["ZES_ENABLE_SYSMAN"] = "1"
             return [pscustomobject]@{
                 arguments = @(
                     "--model", $model, "--codec", $codec,
-                    "--alias", "qwen3-tts-vulkan", "--host", "127.0.0.1",
-                    "--port", "$($Profile.port)", "--lang", "auto", "--clamp-fp16"
+                    "--alias", "qwen3-tts-sycl", "--host", "127.0.0.1",
+                    "--port", "$($Profile.port)", "--lang", "german", "--clamp-fp16"
                 )
-                environment = @{
-                    GGML_BACKEND = "Vulkan0"
-                    GGML_VK_DISABLE_GRAPH_OPTIMIZE = "1"
-                    GGML_VK_DISABLE_COOPMAT = "1"
-                    GGML_VK_DISABLE_COOPMAT2 = "1"
-                    QWEN_CODE_SAMPLER = "host"
-                }
+                environment = $environment
             }
         }
         "supertonic-webgpu" {
@@ -601,7 +1004,7 @@ function Assert-Command {
         [Parameter(Mandatory = $true)][string]$FileStem
     )
     if ([int]$Command.schema_version -ne $Script:SchemaVersion) {
-        throw "unsupported host-agent schema_version '$($Command.schema_version)'; expected 2, restart the updated host agent"
+        throw "unsupported schema_version '$($Command.schema_version)'"
     }
     $requestId = [guid]::Empty
     if (-not [guid]::TryParse([string]$Command.request_id, [ref]$requestId)) {
@@ -616,14 +1019,7 @@ function Assert-Command {
     if ([string]$Command.action -eq "stop_all") {
         return $null
     }
-    $voice = [string]$Command.voice
-    if ($voice.Length -gt 128 -or $voice -match '[\x00-\x1f\x7f]') {
-        throw "voice contains invalid characters"
-    }
-    if ([string]$Command.stage -eq "tts" -and [string]$Command.backend_id -eq "piper" -and
-        @("thorsten", "libritts") -notcontains $voice) {
-        throw "Piper voice '$voice' is not allowlisted"
-    }    if ($Script:AllowedStages -notcontains [string]$Command.stage) {
+    if ($Script:AllowedStages -notcontains [string]$Command.stage) {
         throw "stage '$($Command.stage)' is not allowlisted"
     }
     if (-not $Script:Profiles.ContainsKey([string]$Command.host_profile)) {
@@ -639,6 +1035,14 @@ function Assert-Command {
     if ($profile.variant_ids -notcontains [string]$Command.variant_id) {
         throw "variant '$($Command.variant_id)' is not allowlisted for profile '$($profile.name)'"
     }
+    $voice = [string]$Command.voice
+    if ($voice.Length -gt 128 -or $voice -match '[\x00-\x1f\x7f]') {
+        throw "voice contains invalid characters"
+    }
+    if ([string]$Command.stage -eq "tts" -and [string]$Command.backend_id -eq "piper" -and
+        @("thorsten", "libritts") -notcontains $voice) {
+        throw "Piper voice '$voice' is not allowlisted"
+    }
     Assert-Endpoint -Endpoint ([string]$Command.endpoint) -ExpectedPort ([int]$profile.port)
     if (-not (Test-Path -LiteralPath $profile.executable -PathType Leaf)) {
         throw "configured executable is missing: $($profile.executable)"
@@ -650,14 +1054,14 @@ function Write-CommandResult {
     param(
         [string]$RequestId,
         [string]$State,
-        [int]$Pid = 0,
+        [int]$ProcessId = 0,
         [string]$ErrorMessage = ""
     )
     $result = [ordered]@{
         schema_version = $Script:SchemaVersion
         request_id = $RequestId
         state = $State
-        pid = $Pid
+        pid = $ProcessId
         error = $ErrorMessage
         updated_at_unix = Get-UnixTime
     }
@@ -675,7 +1079,7 @@ function Handle-CommandFile {
         switch ([string]$command.action) {
             "start" {
                 $owned = Start-AllowlistedProfile -Profile $profile -Command $command
-                Write-CommandResult -RequestId $requestId -State "starting" -Pid ([int]$owned.pid)
+                Write-CommandResult -RequestId $requestId -State "starting" -ProcessId ([int]$owned.pid)
             }
             "stop" {
                 Stop-OwnedStage -Stage ([string]$command.stage)
@@ -791,17 +1195,21 @@ function Write-Heartbeat {
         updated_at_unix = Get-UnixTime
         platform = "windows"
         device_name = [string]$vulkan.device_name
-        accelerators = if ($vulkan.available) { @("vulkan") } else { @() }
+        device_index = [int]$vulkan.device_index
+        # The array subexpression prevents PowerShell from unrolling a
+        # single accelerator into a JSON string. Rust expects string[].
+        accelerators = @($(if ($vulkan.available) { "vulkan" }))
         profiles = @($availableProfiles | Sort-Object -Unique)
         processes = @($processes)
     }
     Write-JsonAtomic -Path $Script:StatusPath -Value $status
 }
 
+$initialVulkanStatus = Get-VulkanStatus
 Load-OwnedState
 Write-Host "[host-agent] data=$($Script:DataDir)"
 Write-Host "[host-agent] models=$($Script:ModelsDir)"
-Write-Host "[host-agent] Vulkan device index=$VulkanDevice"
+Write-Host "[host-agent] Vulkan device index=$($Script:ResolvedVulkanDevice) name=$($initialVulkanStatus.device_name)"
 Write-Host "[host-agent] Ctrl+C stops the supervisor; owned inference processes remain tracked"
 
 while ($true) {

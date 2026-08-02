@@ -247,6 +247,26 @@ pub struct ModelActionResponse {
     pub message: String,
 }
 
+/// Optional body for `POST /api/v1/models/{id}/download`.
+/// Tokens are accepted for gated Hugging Face artifacts and are never returned
+/// by the catalog API.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelDownloadRequest {
+    /// Hugging Face access token (`hf_…`). Optional when `HF_TOKEN` / `S2S_HF_TOKEN`
+    /// is already set server-side or remembered for this lab process.
+    #[serde(default)]
+    pub hf_token: Option<String>,
+    /// When true (default), keep a non-empty token in memory for later downloads
+    /// in this process. Never written to the catalog response or logs.
+    #[serde(default = "default_remember_hf_token")]
+    pub remember: bool,
+}
+
+fn default_remember_hf_token() -> bool {
+    true
+}
+
 #[derive(Debug, Clone)]
 struct ModelDownloadRecord {
     variant_id: String,
@@ -542,6 +562,8 @@ pub struct LabController {
     llm_lock: Arc<Mutex<()>>,
     model_lock: Arc<Mutex<()>>,
     downloads: Arc<RwLock<HashMap<String, ModelDownloadRecord>>>,
+    /// Session-scoped Hugging Face token from the Lab UI (never catalog-exported).
+    hf_token: Arc<RwLock<Option<String>>>,
     desired_llm: Arc<RwLock<String>>,
     events: broadcast::Sender<LabEvent>,
     /// Live PCM WebSocket sessions (voice lab clients).
@@ -594,11 +616,52 @@ impl LabController {
             llm_lock: Arc::new(Mutex::new(())),
             model_lock: Arc::new(Mutex::new(())),
             downloads: Arc::new(RwLock::new(HashMap::new())),
+            hf_token: Arc::new(RwLock::new(None)),
             desired_llm: Arc::new(RwLock::new(desired_llm)),
             events,
             session_count: Arc::new(AtomicUsize::new(0)),
             idle_unload: Arc::new(Mutex::new(IdleUnloadState::default())),
         })
+    }
+
+    fn env_hf_token() -> Option<String> {
+        for key in ["S2S_HF_TOKEN", "HF_TOKEN"] {
+            if let Ok(value) = std::env::var(key) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    async fn hf_token_is_configured(&self) -> bool {
+        if Self::env_hf_token().is_some() {
+            return true;
+        }
+        self.hf_token
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|token| !token.trim().is_empty())
+    }
+
+    /// Priority: request body → session memory → server env.
+    async fn resolve_hf_token(&self, request_token: Option<&str>) -> Option<String> {
+        if let Some(token) = request_token
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+        {
+            return Some(token.to_string());
+        }
+        if let Some(token) = self.hf_token.read().await.clone() {
+            let trimmed = token.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+        Self::env_hf_token()
     }
 
     /// Call when a PCM WebSocket client connects. Cancels idle unload and
@@ -1109,11 +1172,80 @@ impl LabController {
         Ok(())
     }
 
+    /// Heuristic ASR+TTS suggestions for setup (not benchmarks).
+    pub async fn suggestions(
+        &self,
+        query: crate::suggest::SuggestionQuery,
+    ) -> crate::suggest::SuggestionsResponse {
+        let catalog = self.catalog().await;
+        crate::suggest::build_suggestions(
+            catalog.hardware,
+            &catalog.backends,
+            &catalog.presets,
+            &query,
+        )
+    }
+
+    /// Best-effort capability profile for AuraGo setup suggestions.
+    ///
+    /// Re-probes RAM/VRAM, merges host-agent heartbeat, and recomputes `tier`.
+    /// See `docs/aurago-integration.md`.
+    pub async fn capability(&self) -> crate::registry::CapabilityProfile {
+        let mut profile = self.hardware.clone();
+        profile.apply_static_probes();
+        match self.host_runtime.status().await {
+            Ok(Some(status)) if status.fresh() => {
+                profile.apply_host_agent(true, status.profiles.clone());
+                // Host agent sees the real GPU; Docker Desktop often only exposes CPU.
+                for accelerator in &status.accelerators {
+                    let acc = accelerator.trim();
+                    if acc.is_empty() {
+                        continue;
+                    }
+                    if !profile.accelerators.iter().any(|known| known == acc) {
+                        profile.accelerators.push(acc.to_string());
+                    }
+                }
+                if !status.device_name.trim().is_empty() {
+                    profile.device_name = status.device_name.clone();
+                }
+                profile.recompute_tier();
+            }
+            _ => {
+                profile.apply_host_agent(false, Vec::<String>::new());
+            }
+        }
+        profile
+    }
+
     pub async fn catalog(&self) -> LabCatalogResponse {
+        let capability = self.capability().await;
+        // Resolve variants against the base hardware filters (accelerators/vendor),
+        // but report the enriched capability snapshot to clients.
         let mut backends = self.catalog.resolved(&self.hardware);
+        if let Ok(voices) = discover_xtts_voice_ids_at(&models_root()).await {
+            if let Some(status) = backends
+                .iter_mut()
+                .find(|status| status.backend.id == "xtts-v2")
+            {
+                for voice in voices {
+                    if !status
+                        .backend
+                        .voices
+                        .iter()
+                        .any(|known| known.eq_ignore_ascii_case(&voice))
+                    {
+                        status.backend.voices.push(voice);
+                    }
+                }
+                status.backend.voices.sort();
+            }
+        }
         let downloads = self.downloads.read().await.clone();
         let host_status = self.host_runtime.status().await.ok().flatten();
+        let hf_token_configured = self.hf_token_is_configured().await;
         for status in &mut backends {
+            status.hf_token_configured = hf_token_configured;
             let Some(variant) = status.selected_variant.as_ref() else {
                 continue;
             };
@@ -1162,7 +1294,7 @@ impl LabController {
         }
         LabCatalogResponse {
             schema_version: self.catalog.schema_version,
-            hardware: self.hardware.clone(),
+            hardware: capability,
             backends,
             presets: self.catalog.presets.clone(),
         }
@@ -1172,7 +1304,11 @@ impl LabController {
         self.events.subscribe()
     }
 
-    pub async fn start_model_download(&self, backend_id: &str) -> Result<ModelActionResponse> {
+    pub async fn start_model_download(
+        &self,
+        backend_id: &str,
+        request: ModelDownloadRequest,
+    ) -> Result<ModelActionResponse> {
         let backend = self
             .catalog
             .find(backend_id)
@@ -1232,6 +1368,37 @@ impl LabController {
             }
         }
 
+        let request_token = request
+            .hf_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .map(str::to_string);
+        if let Some(token) = request_token.as_ref() {
+            if request.remember {
+                *self.hf_token.write().await = Some(token.clone());
+            }
+        }
+        let hf_token = self.resolve_hf_token(request_token.as_deref()).await;
+        let needs_hf = variant_artifacts(&backend, &variant)
+            .iter()
+            .any(|artifact| artifact.auth == "huggingface");
+        if needs_hf
+            && hf_token
+                .as_ref()
+                .is_none_or(|token| token.trim().is_empty())
+        {
+            return Err(anyhow!(
+                "backend '{backend_id}' requires Hugging Face access. Accept the model terms at {} \
+                 and enter a Hugging Face token in the Lab UI (or set HF_TOKEN server-side)",
+                if backend.access_url.is_empty() {
+                    "https://huggingface.co/"
+                } else {
+                    backend.access_url.as_str()
+                }
+            ));
+        }
+
         let cancel = Arc::new(AtomicBool::new(false));
         self.downloads.write().await.insert(
             backend_id.into(),
@@ -1248,7 +1415,7 @@ impl LabController {
         tokio::spawn(async move {
             let _download_guard = controller.model_lock.lock().await;
             let result = controller
-                .download_artifacts(&backend, &variant, &cancel)
+                .download_artifacts(&backend, &variant, &cancel, hf_token.as_deref())
                 .await;
             let cancelled = cancel.load(Ordering::Acquire);
             if result.is_err() && cancelled {
@@ -2626,6 +2793,7 @@ impl LabController {
         backend: &BackendDefinition,
         variant: &BackendVariant,
         cancel: &AtomicBool,
+        hf_token: Option<&str>,
     ) -> Result<()> {
         let root = std::env::var("S2S_MODELS_DIR").unwrap_or_else(|_| "/models".into());
         let artifacts = variant_artifacts(backend, variant);
@@ -2651,7 +2819,15 @@ impl LabController {
             }
 
             let downloaded = self
-                .download_one_artifact(backend, artifact, &path, completed, backend_total, cancel)
+                .download_one_artifact(
+                    backend,
+                    artifact,
+                    &path,
+                    completed,
+                    backend_total,
+                    cancel,
+                    hf_token,
+                )
                 .await?;
             completed = completed.saturating_add(downloaded);
             self.update_download_progress(&backend.id, completed).await;
@@ -2673,6 +2849,7 @@ impl LabController {
         completed_before: u64,
         backend_total: u64,
         cancel: &AtomicBool,
+        hf_token: Option<&str>,
     ) -> Result<u64> {
         let parent = path
             .parent()
@@ -2698,6 +2875,7 @@ impl LabController {
                     completed_before,
                     backend_total,
                     cancel,
+                    hf_token,
                 )
                 .await
             {
@@ -2729,6 +2907,7 @@ impl LabController {
         completed_before: u64,
         backend_total: u64,
         cancel: &AtomicBool,
+        hf_token: Option<&str>,
     ) -> Result<u64> {
         let mut existing = match tokio::fs::metadata(part).await {
             Ok(meta) if meta.is_file() => meta.len(),
@@ -2768,11 +2947,22 @@ impl LabController {
         }
 
         let mut request = self.download_client.get(&artifact.source);
-        if let Ok(token) = std::env::var("S2S_HF_TOKEN").or_else(|_| std::env::var("HF_TOKEN")) {
+        if artifact.auth == "huggingface" {
+            // Prefer the token supplied with this download (UI / session); env is fallback.
+            let token = match hf_token.map(str::trim).filter(|token| !token.is_empty()) {
+                Some(token) => token.to_string(),
+                None => self.resolve_hf_token(None).await.unwrap_or_default(),
+            };
             let token = token.trim();
-            if !token.is_empty() && artifact.source.contains("huggingface.co") {
-                request = request.bearer_auth(token);
+            if token.is_empty() {
+                return Err(anyhow!(
+                    "artifact '{}' requires Hugging Face access. Accept the model terms at {} \
+                     and enter a Hugging Face token in the Lab UI (or set HF_TOKEN server-side)",
+                    artifact.path,
+                    backend.access_url
+                ));
             }
+            request = request.bearer_auth(token);
         }
         if existing > 0 {
             request = request.header(reqwest::header::RANGE, format!("bytes={existing}-"));
@@ -2781,7 +2971,22 @@ impl LabController {
         let response = request
             .send()
             .await
-            .with_context(|| format!("download {}", artifact.source))?
+            .with_context(|| format!("download {}", artifact.source))?;
+        if artifact.auth == "huggingface"
+            && matches!(
+                response.status(),
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            )
+        {
+            return Err(anyhow!(
+                "Hugging Face denied access to artifact '{}' (HTTP {}). Accept the model terms \
+                 at {} and verify the Hugging Face token (Lab UI or HF_TOKEN)",
+                artifact.path,
+                response.status(),
+                backend.access_url
+            ));
+        }
+        let response = response
             .error_for_status()
             .with_context(|| format!("download {}", artifact.source))?;
 
@@ -3077,21 +3282,65 @@ impl LabController {
         let qwen = backend.id == "qwen3-tts-0.6b";
         let higgs = backend.id == "higgs-tts-3-4b";
         let vibevoice = backend.id == "vibevoice-realtime-0.5b";
+        let xtts = backend.id == "xtts-v2";
+        let inflect = backend.id == "inflect-micro-v2";
+        let crispasr_wav = matches!(
+            backend.id.as_str(),
+            "piper"
+                | "cosyvoice3-0.5b"
+                | "omnivoice"
+                | "vibevoice-realtime-0.5b"
+                | "kokoro"
+                | "inflect-micro-v2"
+        );
         let voice = if backend.default_voice.is_empty() {
             "default"
         } else {
             backend.default_voice.as_str()
         };
-        // CrispASR VibeVoice and Higgs prefer WAV; Qwen uses raw PCM.
-        let response_format = if higgs || vibevoice { "wav" } else { "pcm" };
-        let body = serde_json::json!({
+        // CrispASR / Higgs / XTTS / Inflect prefer WAV; Qwen uses raw PCM.
+        let response_format = if higgs || vibevoice || xtts || crispasr_wav {
+            "wav"
+        } else {
+            "pcm"
+        };
+        let mut body = serde_json::json!({
             "model": backend.model,
-            "input": if qwen { "Hallo." } else { "Test." },
+            "input": if qwen {
+                "Hallo."
+            } else if inflect {
+                "Hello."
+            } else {
+                "Test."
+            },
             "voice": voice,
-            "language": if qwen { "german" } else { "de" },
+            "language": if qwen {
+                "german"
+            } else if inflect {
+                "en"
+            } else {
+                "de"
+            },
             "response_format": response_format,
             "max_new_tokens": if qwen { 16 } else if higgs { 256 } else { 64 }
         });
+        if inflect {
+            body["seed"] = serde_json::json!(7);
+        }
+        crate::tts::apply_preloaded_voice_policy(&mut body, &backend.model);
+        // Piper/OmniVoice/Inflect load a fixed voice at process start; drop
+        // placeholder OpenAI voice names so warmup does not 400.
+        if matches!(
+            body.get("voice").and_then(|v| v.as_str()),
+            Some("default") | Some("male")
+        ) && matches!(
+            backend.id.as_str(),
+            "piper" | "omnivoice" | "inflect-micro-v2"
+        ) {
+            if let Some(object) = body.as_object_mut() {
+                object.remove("voice");
+            }
+        }
         let response = self
             .client
             .post(endpoint)
@@ -3441,6 +3690,24 @@ fn resolve_requested_voice(
     if requested_voice.is_empty() {
         return Err(anyhow!("voice must not be empty"));
     }
+    if backend.id == "xtts-v2" {
+        if !is_safe_xtts_voice_id(requested_voice) {
+            return Err(anyhow!(
+                "voice '{requested_voice}' is not a safe XTTS voice id"
+            ));
+        }
+        let voice_path = models_root()
+            .join("xtts-v2")
+            .join("voices")
+            .join(format!("{requested_voice}.wav"));
+        if voice_path.is_file() {
+            return Ok(requested_voice.to_string());
+        }
+        return Err(anyhow!(
+            "voice '{requested_voice}' is not installed for 'xtts-v2'"
+        ));
+    }
+
     let voice = backend
         .voices
         .iter()
@@ -3470,7 +3737,66 @@ fn validate_tts_warmup_audio(backend: &BackendDefinition, bytes: &[u8]) -> Resul
             bytes.len()
         ));
     }
+    if backend.id == "xtts-v2" {
+        let reader = hound::WavReader::new(std::io::Cursor::new(bytes))
+            .context("XTTS warmup returned invalid WAV data")?;
+        let spec = reader.spec();
+        if spec.channels != 1
+            || spec.sample_rate != 24_000
+            || spec.bits_per_sample != 16
+            || reader.duration() == 0
+        {
+            return Err(anyhow!(
+                "warmup for '{}' returned unsupported WAV format \
+                 (channels={}, rate={}, bits={}, frames={})",
+                backend.id,
+                spec.channels,
+                spec.sample_rate,
+                spec.bits_per_sample,
+                reader.duration()
+            ));
+        }
+    }
     Ok(())
+}
+
+fn is_safe_xtts_voice_id(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'-'))
+}
+
+async fn discover_xtts_voice_ids_at(root: &Path) -> Result<Vec<String>> {
+    let voices_dir = root.join("xtts-v2").join("voices");
+    let mut entries = match tokio::fs::read_dir(&voices_dir).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut voices = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if !entry.file_type().await?.is_file()
+            || !path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
+        {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if is_safe_xtts_voice_id(stem) {
+            voices.push(stem.to_string());
+        }
+    }
+    voices.sort();
+    voices.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    Ok(voices)
 }
 
 async fn model_installation_state(
@@ -3753,6 +4079,8 @@ mod tests {
                 voice_mode: VoiceMode::Fixed,
                 native_sample_rate: 0,
                 languages: vec![],
+                licenses: vec![],
+                access_url: String::new(),
                 resources: crate::registry::ResourceEstimate {
                     vram_gb: 1.0,
                     ram_gb: 1.0,
@@ -3800,6 +4128,8 @@ mod tests {
             voice_mode: VoiceMode::Fixed,
             native_sample_rate: 0,
             languages: vec![],
+            licenses: vec![],
+            access_url: String::new(),
             resources: crate::registry::ResourceEstimate {
                 vram_gb: 1.0,
                 ram_gb: 1.0,
@@ -3841,14 +4171,23 @@ mod tests {
     }
 
     fn cpu_hardware() -> HardwareProfile {
-        HardwareProfile {
+        let mut profile = HardwareProfile {
             vendor: "unknown".into(),
             device_name: "CPU".into(),
             accelerators: vec!["cpu".into()],
             platform: std::env::consts::OS.into(),
             in_container: false,
             allow_experimental: false,
-        }
+            vram_total_gb: None,
+            vram_free_gb: None,
+            ram_total_gb: None,
+            ram_available_gb: None,
+            host_agent_online: false,
+            host_profiles: Vec::new(),
+            tier: "cpu-light".into(),
+        };
+        profile.recompute_tier();
+        profile
     }
 
     #[test]
@@ -4191,6 +4530,134 @@ mod tests {
         assert!(validate_tts_warmup_audio(&qwen, &[0, 0]).is_ok());
     }
 
+    #[test]
+    fn xtts_warmup_requires_mono_pcm16_wav_at_24khz() {
+        fn wav(sample_rate: u32) -> Vec<u8> {
+            let mut cursor = std::io::Cursor::new(Vec::new());
+            {
+                let spec = hound::WavSpec {
+                    channels: 1,
+                    sample_rate,
+                    bits_per_sample: 16,
+                    sample_format: hound::SampleFormat::Int,
+                };
+                let mut writer = hound::WavWriter::new(&mut cursor, spec).unwrap();
+                writer.write_sample::<i16>(0).unwrap();
+                writer.finalize().unwrap();
+            }
+            cursor.into_inner()
+        }
+
+        let xtts = backend("xtts-v2", BackendStage::Tts, "");
+        assert!(validate_tts_warmup_audio(&xtts, &[]).is_err());
+        assert!(validate_tts_warmup_audio(&xtts, &wav(16_000)).is_err());
+        assert!(validate_tts_warmup_audio(&xtts, &wav(24_000)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn xtts_voice_discovery_filters_paths_and_model_delete_keeps_user_voices() {
+        let root = std::env::temp_dir().join(format!("s2s-xtts-test-{}", uuid::Uuid::new_v4()));
+        let voices = root.join("xtts-v2/voices");
+        tokio::fs::create_dir_all(&voices).await.unwrap();
+        tokio::fs::write(voices.join("de_sample.wav"), b"pinned")
+            .await
+            .unwrap();
+        tokio::fs::write(voices.join("user_voice-2.wav"), b"user")
+            .await
+            .unwrap();
+        tokio::fs::write(voices.join("ignored.mp3"), b"ignored")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            discover_xtts_voice_ids_at(&root).await.unwrap(),
+            vec!["de_sample", "user_voice-2"]
+        );
+        assert!(is_safe_xtts_voice_id("user_voice-2"));
+        assert!(!is_safe_xtts_voice_id("../outside"));
+        assert!(!is_safe_xtts_voice_id("voice.wav"));
+
+        let catalog: BackendCatalog =
+            serde_json::from_str(include_str!("../config/backends.json")).unwrap();
+        let backend = catalog.find("xtts-v2").unwrap();
+        let variant = backend
+            .variants
+            .iter()
+            .find(|variant| variant.id == "xtts-v2-cpu-windows")
+            .unwrap();
+        remove_model_artifacts_at(backend, variant, &root)
+            .await
+            .unwrap();
+        assert!(!tokio::fs::try_exists(voices.join("de_sample.wav"))
+            .await
+            .unwrap());
+        assert!(tokio::fs::try_exists(voices.join("user_voice-2.wav"))
+            .await
+            .unwrap());
+
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn download_client_strips_authorization_on_foreign_redirect_host() {
+        async fn read_headers(stream: &mut tokio::net::TcpStream) -> String {
+            let mut bytes = Vec::new();
+            let mut buffer = [0u8; 1024];
+            loop {
+                let count = stream.read(&mut buffer).await.unwrap();
+                if count == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buffer[..count]);
+                if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            String::from_utf8(bytes).unwrap()
+        }
+
+        let target = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
+        let target_port = target.local_addr().unwrap().port();
+        let target_task = tokio::spawn(async move {
+            let (mut stream, _) = target.accept().await.unwrap();
+            let headers = read_headers(&mut stream).await;
+            assert!(
+                !headers.to_ascii_lowercase().contains("authorization:"),
+                "authorization leaked across redirect host: {headers}"
+            );
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .await
+                .unwrap();
+        });
+
+        let redirect = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let redirect_addr = redirect.local_addr().unwrap();
+        let redirect_task = tokio::spawn(async move {
+            let (mut stream, _) = redirect.accept().await.unwrap();
+            let headers = read_headers(&mut stream).await;
+            assert!(headers
+                .to_ascii_lowercase()
+                .contains("authorization: bearer secret-marker"));
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.2:{target_port}/model\r\n\
+                 Content-Length: 0\r\n\r\n"
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let response = build_download_client()
+            .unwrap()
+            .get(format!("http://{redirect_addr}/start"))
+            .bearer_auth("secret-marker")
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_success());
+        redirect_task.await.unwrap();
+        target_task.await.unwrap();
+    }
+
     #[tokio::test]
     async fn reconcile_discovers_running_backend_after_controller_restart() {
         let runtime = runtime::runtime_from(test_config());
@@ -4300,9 +4767,45 @@ mod tests {
         )
         .unwrap();
 
-        let download = lab.start_model_download("asr-a").await.unwrap();
+        let download = lab
+            .start_model_download("asr-a", ModelDownloadRequest::default())
+            .await
+            .unwrap();
         assert_eq!(download.state, "bundled");
         assert!(lab.delete_model("asr-a").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_hf_token_prefers_request_then_session_then_env() {
+        let runtime = runtime::runtime_from(test_config());
+        let lab = LabController::with_control(
+            test_catalog("http://127.0.0.1:9".into()),
+            cpu_hardware(),
+            runtime,
+            Arc::new(FakeControl::default()),
+            false,
+        )
+        .unwrap();
+
+        std::env::remove_var("HF_TOKEN");
+        std::env::remove_var("S2S_HF_TOKEN");
+        assert!(lab.resolve_hf_token(None).await.is_none());
+
+        std::env::set_var("HF_TOKEN", "env-token");
+        assert_eq!(
+            lab.resolve_hf_token(None).await.as_deref(),
+            Some("env-token")
+        );
+        *lab.hf_token.write().await = Some("session-token".into());
+        assert_eq!(
+            lab.resolve_hf_token(None).await.as_deref(),
+            Some("session-token")
+        );
+        assert_eq!(
+            lab.resolve_hf_token(Some("request-token")).await.as_deref(),
+            Some("request-token")
+        );
+        std::env::remove_var("HF_TOKEN");
     }
 
     #[tokio::test]
@@ -4447,6 +4950,7 @@ mod tests {
             path: "optional/model.bin".into(),
             sha256: String::new(),
             size: 4,
+            auth: String::new(),
         }];
         let variant = optional.variants[0].clone();
 

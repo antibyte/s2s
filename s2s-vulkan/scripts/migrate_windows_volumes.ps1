@@ -40,11 +40,27 @@ function Copy-NamedVolumeMissingFiles {
             $absolute,
             "copy missing files from Docker volume '$VolumeName'"
         )) {
+        # BusyBox `cp -a -n /source/. /target/` skips the complete source
+        # directory when /target already exists. Create the directory tree
+        # first, then copy each missing file/symlink independently.
+        $copyMissing = @'
+set -eu
+cd /source
+find . -type d -exec mkdir -p "/target/{}" \;
+find . \( -type f -o -type l \) -exec sh -c '
+    for path do
+        target="/target/$path"
+        if [ ! -e "$target" ] && [ ! -L "$target" ]; then
+            cp -a "$path" "$target"
+        fi
+    done
+' sh {} +
+'@
         docker run --rm `
             -v "${VolumeName}:/source:ro" `
             -v "${absolute}:/target" `
             alpine:3.20 `
-            sh -c "cp -a -n /source/. /target/"
+            sh -c $copyMissing
         if ($LASTEXITCODE -ne 0) {
             throw "Copy from Docker volume '$VolumeName' failed"
         }

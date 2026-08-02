@@ -115,12 +115,17 @@ const els = {
   modelDialogTitle: $("model-dialog-title"),
   modelDialogCopy: $("model-dialog-copy"),
   modelDialogSize: $("model-dialog-size"),
+  modelDialogHf: $("model-dialog-hf"),
+  modelDialogHfLink: $("model-dialog-hf-link"),
+  modelDialogHfToken: $("model-dialog-hf-token"),
+  modelDialogHfRemember: $("model-dialog-hf-remember"),
   modelProgress: $("model-progress"),
   modelProgressFill: $("model-progress-fill"),
   modelProgressLabel: $("model-progress-label"),
   modelDialogError: $("model-dialog-error"),
   modelDialogCancel: $("model-dialog-cancel"),
   modelDialogConfirm: $("model-dialog-confirm"),
+  capabilityLine: $("capability-line"),
 };
 
 // ── Catalogs ────────────────────────────────────────────────────────
@@ -128,7 +133,7 @@ const els = {
 /** @typedef {{ cpu: number, gpu: number, vram: number }} ResourceStars */
 /** @typedef {{ show: boolean, cpu: boolean, nvidia: boolean, intel: boolean, amd: boolean, vulkan: boolean }} GpuSupport */
 /** @typedef {{ id: string, label: string }} LanguageLabel */
-/** @typedef {{ id: string, stage: string, name: string, tag: string, desc: string, vramGb: number, stars: ResourceStars, gpuSupport: GpuSupport, languageLabels: LanguageLabel[], meta: string, available?: boolean, installed: boolean, bundled: boolean, downloadState: string, downloadSizeBytes: number, downloadedBytes: number, deletable: boolean, downloadError: string, defaultVoice: string, voices: string[], voiceMode: "request"|"restart"|"fixed", env?: Record<string,string>, note?: string }} EngineOpt */
+/** @typedef {{ id: string, stage: string, name: string, tag: string, desc: string, vramGb: number, stars: ResourceStars, gpuSupport: GpuSupport, languageLabels: LanguageLabel[], meta: string, available?: boolean, installed: boolean, bundled: boolean, downloadState: string, downloadSizeBytes: number, downloadedBytes: number, deletable: boolean, downloadError: string, defaultVoice: string, voices: string[], voiceMode: "request"|"restart"|"fixed", licenses: string[], accessUrl: string, authRequired?: boolean, hfTokenConfigured?: boolean, env?: Record<string,string>, note?: string }} EngineOpt */
 
 /** Model choices and presets are populated exclusively from /api/v1/catalog. */
 /** @type {EngineOpt[]} */
@@ -138,6 +143,86 @@ let TTS_OPTIONS = [];
 /** @type {EngineOpt[]} */
 let LLM_OPTIONS = [];
 let PRESETS = {};
+/** @type {Record<string, any> | null} */
+let CAPABILITY = null;
+/** @type {Record<string, any> | null} */
+let SUGGESTIONS = null;
+/** Heuristic recommendations from /api/v1/suggestions (not benchmarks). */
+const RECOMMENDED = {
+  asr: new Set(),
+  tts: new Set(),
+  presets: new Set(),
+};
+
+function suggestionLanguage() {
+  const raw =
+    localStorage.getItem("s2s.lab.suggestLang") ||
+    localStorage.getItem("s2s.lab.language") ||
+    "de";
+  return String(raw).trim().toLowerCase() || "de";
+}
+
+function applySuggestionsPayload(payload) {
+  SUGGESTIONS = payload && typeof payload === "object" ? payload : null;
+  CAPABILITY = SUGGESTIONS?.capability || CAPABILITY;
+  RECOMMENDED.asr.clear();
+  RECOMMENDED.tts.clear();
+  RECOMMENDED.presets.clear();
+  for (const item of SUGGESTIONS?.suggested_presets || []) {
+    if (item?.id) RECOMMENDED.presets.add(item.id);
+    if (item?.asr_id) RECOMMENDED.asr.add(item.asr_id);
+    if (item?.tts_id) RECOMMENDED.tts.add(item.tts_id);
+  }
+  for (const item of SUGGESTIONS?.suggested_pairs || []) {
+    if (item?.asr_id) RECOMMENDED.asr.add(item.asr_id);
+    if (item?.tts_id) RECOMMENDED.tts.add(item.tts_id);
+  }
+}
+
+function renderCapabilityLine() {
+  if (!els.capabilityLine) return;
+  const cap = CAPABILITY || SUGGESTIONS?.capability;
+  if (!cap) {
+    els.capabilityLine.hidden = true;
+    els.capabilityLine.textContent = "";
+    return;
+  }
+  const tier = cap.tier || "cpu-light";
+  const device = cap.device_name || "host";
+  const acc = Array.isArray(cap.accelerators) ? cap.accelerators.join("+") : "cpu";
+  const ram =
+    cap.ram_available_gb != null
+      ? ` · RAM ~${Number(cap.ram_available_gb).toFixed(1)} GB frei`
+      : "";
+  const budget =
+    SUGGESTIONS?.budget_vram_gb != null
+      ? ` · Budget ~${Number(SUGGESTIONS.budget_vram_gb).toFixed(1)} GB VRAM`
+      : "";
+  const host = cap.host_agent_online ? " · Host-Agent online" : "";
+  els.capabilityLine.hidden = false;
+  els.capabilityLine.innerHTML = `<strong>System</strong> ${device} · tier <strong>${tier}</strong> · ${acc}${ram}${budget}${host}`;
+}
+
+async function loadSuggestions({ quiet = false } = {}) {
+  try {
+    const lang = encodeURIComponent(suggestionLanguage());
+    const response = await fetch(
+      `/api/v1/suggestions?language=${lang}&stable_only=true&limit=8`,
+      { cache: "no-store" }
+    );
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    applySuggestionsPayload(payload);
+    renderCapabilityLine();
+    if (!quiet) {
+      const n =
+        (payload.suggested_presets?.length || 0) + (payload.suggested_pairs?.length || 0);
+      log(`Vorschläge (${payload.scoring || "heuristic"}): ${n} Einträge für ${suggestionLanguage()}`);
+    }
+  } catch (error) {
+    if (!quiet) log(`Vorschläge nicht geladen: ${error.message}`);
+  }
+}
 
 /** Clamp demand rating to 1–5 stars. */
 function clampStars(value, fallback = 1) {
@@ -346,6 +431,24 @@ function catalogOption(entry) {
   const hostManaged = entry.host_managed === true;
   const runtimeState = entry.runtime_state || (hostManaged ? "unknown" : "external");
   const runtimeReason = entry.runtime_reason || "";
+  const licenses = Array.isArray(entry.licenses) ? entry.licenses.filter(Boolean) : [];
+  const accessUrl = entry.access_url || "";
+  const authRequired =
+    entry.auth_required === true ||
+    Boolean(accessUrl) ||
+    (Array.isArray(entry.artifacts) &&
+      entry.artifacts.some((artifact) => artifact?.auth === "huggingface"));
+  const hfTokenConfigured = entry.hf_token_configured === true;
+  const stateNote = runtimeReason
+    ? `Host-Agent: ${runtimeReason}`
+    : entry.available
+      ? `${variant.id}${variant.stable ? "" : " · experimental"}${hostManaged ? ` · ${runtimeState}` : ""}`
+      : entry.reason || "Auf diesem System nicht verfügbar";
+  const accessNote = licenses.length
+    ? `Lizenz: ${licenses.join(" + ")}${authRequired ? " · HF-Zugang erforderlich" : ""}`
+    : authRequired
+      ? "HF-Zugang erforderlich"
+      : "";
   const env =
     entry.stage === "asr"
       ? { S2S_WHISPER_URL: endpoint }
@@ -376,15 +479,15 @@ function catalogOption(entry) {
     voiceMode: ["request", "restart", "fixed"].includes(entry.voice_mode)
       ? entry.voice_mode
       : "fixed",
+    licenses,
+    accessUrl,
+    authRequired,
+    hfTokenConfigured,
     hostManaged,
     runtimeState,
     runtimeReason,
     env,
-    note: runtimeReason
-      ? `Host-Agent: ${runtimeReason}`
-      : entry.available
-        ? `${variant.id}${variant.stable ? "" : " · experimental"}${hostManaged ? ` · ${runtimeState}` : ""}`
-        : entry.reason || "Auf diesem System nicht verfügbar",
+    note: [stateNote, accessNote].filter(Boolean).join(" · "),
   };
 }
 
@@ -417,17 +520,22 @@ async function loadBackendCatalog({ quiet = false } = {}) {
         ])
       );
     }
+    if (catalog.hardware && typeof catalog.hardware === "object") {
+      CAPABILITY = catalog.hardware;
+      renderCapabilityLine();
+    }
     if (!ASR_OPTIONS.some((option) => option.id === lab.asr)) lab.asr = ASR_OPTIONS[0].id;
     if (!TTS_OPTIONS.some((option) => option.id === lab.tts)) lab.tts = TTS_OPTIONS[0].id;
     if (!LLM_OPTIONS.some((option) => option.id === lab.llm)) lab.llm = LLM_OPTIONS[0].id;
     syncVoiceForTts(TTS_OPTIONS.find((option) => option.id === lab.tts));
     if (!PRESETS[lab.preset]) lab.preset = "custom";
     persistLab();
+    await loadSuggestions({ quiet: true });
     renderPresets();
     refreshLabUi();
     if (!quiet) {
       log(
-        `Backend catalog v${catalog.schema_version}: ${catalog.hardware?.device_name || "host"}`
+        `Backend catalog v${catalog.schema_version}: ${catalog.hardware?.device_name || "host"} · tier ${catalog.hardware?.tier || "?"}`
       );
     }
     return catalog;
@@ -875,6 +983,16 @@ function resetModelDialog() {
     els.modelDialogError.hidden = true;
     els.modelDialogError.textContent = "";
   }
+  if (els.modelDialogHf) els.modelDialogHf.hidden = true;
+  if (els.modelDialogHfToken) {
+    els.modelDialogHfToken.value = "";
+    els.modelDialogHfToken.required = false;
+  }
+  if (els.modelDialogHfRemember) els.modelDialogHfRemember.checked = true;
+  if (els.modelDialogHfLink) {
+    els.modelDialogHfLink.href = "#";
+    els.modelDialogHfLink.hidden = true;
+  }
   if (els.modelDialogConfirm) {
     els.modelDialogConfirm.hidden = false;
     els.modelDialogConfirm.disabled = false;
@@ -886,14 +1004,56 @@ function resetModelDialog() {
   }
 }
 
-function confirmModelAction({ title, message, size = "", confirmLabel, danger = false }) {
-  if (!els.modelDialog) return Promise.resolve(window.confirm(`${message}\n${size}`));
+/**
+ * @param {{
+ *   title: string,
+ *   message: string,
+ *   size?: string,
+ *   confirmLabel: string,
+ *   danger?: boolean,
+ *   hfAuth?: { accessUrl?: string, tokenConfigured?: boolean } | null,
+ * }} opts
+ * @returns {Promise<false | { hfToken: string, remember: boolean }>}
+ */
+function confirmModelAction({
+  title,
+  message,
+  size = "",
+  confirmLabel,
+  danger = false,
+  hfAuth = null,
+}) {
+  if (!els.modelDialog) {
+    const ok = window.confirm(`${message}\n${size}`);
+    if (!ok) return Promise.resolve(false);
+    if (!hfAuth) return Promise.resolve({ hfToken: "", remember: true });
+    const token = window.prompt("Hugging Face Token (hf_…)", "") || "";
+    return Promise.resolve({ hfToken: token.trim(), remember: true });
+  }
   resetModelDialog();
   els.modelDialogTitle.textContent = title;
   els.modelDialogCopy.textContent = message;
   els.modelDialogSize.textContent = size;
   els.modelDialogConfirm.textContent = confirmLabel;
   els.modelDialogConfirm.classList.toggle("danger", danger);
+  if (hfAuth && els.modelDialogHf) {
+    els.modelDialogHf.hidden = false;
+    if (els.modelDialogHfLink) {
+      if (hfAuth.accessUrl) {
+        els.modelDialogHfLink.href = hfAuth.accessUrl;
+        els.modelDialogHfLink.hidden = false;
+      } else {
+        els.modelDialogHfLink.hidden = true;
+      }
+    }
+    if (els.modelDialogHfToken) {
+      // Server-side / remembered token is enough; field stays optional then.
+      els.modelDialogHfToken.required = !hfAuth.tokenConfigured;
+      els.modelDialogHfToken.placeholder = hfAuth.tokenConfigured
+        ? "optional — Token ist bereits konfiguriert"
+        : "hf_…";
+    }
+  }
   if (!els.modelDialog.open) els.modelDialog.showModal();
   return new Promise((resolve) => {
     const finish = (answer) => {
@@ -903,7 +1063,26 @@ function confirmModelAction({ title, message, size = "", confirmLabel, danger = 
       if (els.modelDialog.open) els.modelDialog.close();
       resolve(answer);
     };
-    els.modelDialogConfirm.onclick = () => finish(true);
+    els.modelDialogConfirm.onclick = () => {
+      if (hfAuth && els.modelDialogHfToken) {
+        const token = (els.modelDialogHfToken.value || "").trim();
+        if (!token && !hfAuth.tokenConfigured) {
+          if (els.modelDialogError) {
+            els.modelDialogError.hidden = false;
+            els.modelDialogError.textContent =
+              "Bitte Hugging Face Token eintragen (oder HF_TOKEN serverseitig setzen).";
+          }
+          els.modelDialogHfToken.focus();
+          return;
+        }
+        finish({
+          hfToken: token,
+          remember: Boolean(els.modelDialogHfRemember?.checked),
+        });
+        return;
+      }
+      finish({ hfToken: "", remember: true });
+    };
     els.modelDialogCancel.onclick = () => finish(false);
     els.modelDialog.oncancel = (event) => {
       event.preventDefault();
@@ -1001,6 +1180,7 @@ async function ensureModelInstalled(opt) {
     : ` Der Download ist möglich, die Aktivierung bleibt jedoch gesperrt: ${
         opt.note || "keine kompatible Laufzeitvariante"
       }`;
+  const needsHf = Boolean(opt.authRequired || opt.accessUrl);
   const approved = await confirmModelAction({
     title: "Modell herunterladen",
     message:
@@ -1008,11 +1188,24 @@ async function ensureModelInstalled(opt) {
       compatibilityNote,
     size: `Benötigter Download: ${formatModelSize(opt.downloadSizeBytes)}`,
     confirmLabel: "OK · herunterladen",
+    hfAuth: needsHf
+      ? {
+          accessUrl: opt.accessUrl || "",
+          tokenConfigured: Boolean(opt.hfTokenConfigured),
+        }
+      : null,
   });
   if (!approved) return false;
   try {
+    const body = {};
+    if (needsHf) {
+      if (approved.hfToken) body.hf_token = approved.hfToken;
+      body.remember = approved.remember !== false;
+    }
     await apiRequest(`/api/v1/models/${encodeURIComponent(opt.id)}/download`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
   } catch (error) {
     showToast(`Download konnte nicht gestartet werden: ${error.message}`, {
@@ -1057,22 +1250,33 @@ function modelStatus(opt) {
   return `Download nötig · ${formatModelSize(opt.downloadSizeBytes)}`;
 }
 
+function isRecommendedOption(opt) {
+  if (!opt?.id) return false;
+  if (opt.stage === "asr") return RECOMMENDED.asr.has(opt.id);
+  if (opt.stage === "tts") return RECOMMENDED.tts.has(opt.id);
+  // Fallback: engine lists may omit stage on some paths
+  return RECOMMENDED.asr.has(opt.id) || RECOMMENDED.tts.has(opt.id);
+}
+
 function choiceButton(opt, selectedId) {
   const sel = opt.id === selectedId;
   const avail = opt.available !== false;
   const downloadOnly = !avail && !opt.installed && !opt.bundled;
+  const recommended = isRecommendedOption(opt);
   return `
     <div class="choice-wrap">
     <button type="button" class="choice choice-select${
       avail ? "" : downloadOnly ? " download-only" : " disabled"
-    }"
+    }${recommended ? " recommended" : ""}"
       role="option" data-id="${opt.id}"
       aria-selected="${sel ? "true" : "false"}"
       data-available="${avail ? "true" : "false"}"
       data-installed="${opt.installed ? "true" : "false"}"
       ${
         avail
-          ? ""
+          ? recommended
+            ? 'title="Voraussichtlich gut für dieses System (Heuristik)"'
+            : ""
           : `title="${
               downloadOnly
                 ? "Download möglich; Aktivierung nicht verfügbar"
@@ -1080,7 +1284,9 @@ function choiceButton(opt, selectedId) {
             }"`
       }>
       <div class="choice-top">
-        <span class="choice-name">${opt.name}</span>
+        <span class="choice-name">${opt.name}${
+          recommended ? '<span class="choice-rec-badge">Empfohlen</span>' : ""
+        }</span>
         <span class="choice-tag">${opt.tag}</span>
       </div>
       <div class="choice-desc">${opt.desc}</div>
@@ -1128,12 +1334,18 @@ function renderChoices(container, options, selectedId, onPick) {
 function renderPresets() {
   if (!els.presetChips) return;
   els.presetChips.innerHTML = Object.entries(PRESETS)
-    .map(
-      ([id, p]) =>
-        `<button type="button" class="chip" data-id="${id}" aria-pressed="${
-          lab.preset === id ? "true" : "false"
-        }">${p.label}</button>`
-    )
+    .map(([id, p]) => {
+      const recommended = RECOMMENDED.presets.has(id);
+      return `<button type="button" class="chip${
+        recommended ? " recommended" : ""
+      }" data-id="${id}" aria-pressed="${
+        lab.preset === id ? "true" : "false"
+      }" title="${
+        recommended ? "Voraussichtlich gut für dieses System (Heuristik)" : ""
+      }">${p.label}${
+        recommended ? '<span class="chip-rec">Empfohlen</span>' : ""
+      }</button>`;
+    })
     .join("");
   els.presetChips.querySelectorAll(".chip").forEach((chip) => {
     chip.addEventListener("click", () => applyPreset(chip.dataset.id));

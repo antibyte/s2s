@@ -4,6 +4,7 @@
 mod audio;
 mod benchmark;
 mod config;
+mod gateway;
 mod gpu;
 mod host_runtime;
 mod io;
@@ -14,6 +15,7 @@ mod pipeline;
 mod registry;
 mod runtime;
 mod stt;
+mod suggest;
 mod tts;
 mod vad;
 
@@ -163,4 +165,3 @@ fn print_banner(cfg: &Config, gpu: &gpu::GpuReport) {
         }
     );
 }
-mod gateway;

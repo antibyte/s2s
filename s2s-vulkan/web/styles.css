@@ -846,6 +846,44 @@ body.lab-open { overflow: hidden; }
   opacity: 1;
   border-color: rgba(255, 193, 77, 0.45);
 }
+.capability-line {
+  margin: 0.55rem 0 0.85rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(92, 225, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(92, 225, 255, 0.06);
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  font-family: var(--mono);
+}
+.capability-line strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.choice-rec-badge,
+.chip-rec {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.35rem;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(92, 225, 255, 0.45);
+  background: rgba(92, 225, 255, 0.14);
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.chip.recommended {
+  border-color: rgba(92, 225, 255, 0.55);
+  box-shadow: 0 0 0 1px rgba(92, 225, 255, 0.12);
+}
+.choice.recommended {
+  border-color: rgba(92, 225, 255, 0.4);
+}
 .choice[data-available="false"] .choice-tag {
   color: var(--warn);
   border-color: rgba(255, 193, 77, 0.3);
@@ -1085,6 +1123,59 @@ body.lab-open { overflow: hidden; }
   font-family: var(--mono);
   font-size: 0.74rem;
   color: var(--ink);
+}
+.model-dialog-hf {
+  margin-top: 0.9rem;
+  padding: 0.75rem 0.8rem;
+  border: 1px solid rgba(92, 225, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.model-dialog-hf-note {
+  margin: 0 0 0.65rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+.model-dialog-hf-note a {
+  color: var(--accent);
+}
+.model-dialog-hf-label {
+  display: block;
+  margin-bottom: 0.3rem;
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.model-dialog-hf-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(92, 225, 255, 0.28);
+  border-radius: 10px;
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.28);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+.model-dialog-hf-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(92, 225, 255, 0.15);
+}
+.model-dialog-hf-remember {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+  color: var(--muted);
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.model-dialog-hf-remember input {
+  accent-color: var(--accent);
 }
 .model-progress {
   margin-top: 0.85rem;

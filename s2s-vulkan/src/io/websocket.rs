@@ -504,8 +504,26 @@ fn build_gateway_suggestions(
 async fn post_model_download(
     State(state): State<AppState>,
     Path(backend_id): Path<String>,
+    body: axum::body::Bytes,
 ) -> Response {
-    match state.lab.start_model_download(&backend_id).await {
+    // Empty body keeps backward compatibility with older UI clients.
+    let request = if body.is_empty() {
+        crate::lab::ModelDownloadRequest::default()
+    } else {
+        match serde_json::from_slice::<crate::lab::ModelDownloadRequest>(&body) {
+            Ok(value) => value,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("invalid download request body: {error}")
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    };
+    match state.lab.start_model_download(&backend_id, request).await {
         Ok(result) => (StatusCode::ACCEPTED, Json(result)).into_response(),
         Err(error) => (
             StatusCode::BAD_REQUEST,

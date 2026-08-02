@@ -798,6 +798,376 @@
       ]
     },
     {
+      "id": "qwen3-asr-0.6b",
+      "stage": "asr",
+      "name": "Qwen3-ASR 0.6B",
+      "tag": "multilingual",
+      "description": "Qwen3-ASR 0.6B (GGUF via CrispASR): Speech-LLM mit ~30 Sprachen + chinesischen Dialekten. Q4_K ~631 MB, gut fuer 8-GB-Pipelines.",
+      "protocol": "whisper-cpp",
+      "model": "Qwen/Qwen3-ASR-0.6B",
+      "languages": [
+        "auto",
+        "ar",
+        "cs",
+        "da",
+        "de",
+        "el",
+        "en",
+        "es",
+        "fa",
+        "fi",
+        "fil",
+        "fr",
+        "hi",
+        "hu",
+        "id",
+        "it",
+        "ja",
+        "ko",
+        "mk",
+        "ms",
+        "nl",
+        "pl",
+        "pt",
+        "ro",
+        "ru",
+        "sv",
+        "th",
+        "tr",
+        "vi",
+        "yue",
+        "zh"
+      ],
+      "resources": {
+        "vram_gb": 1.2,
+        "ram_gb": 2.0,
+        "stars": {
+          "cpu": 2,
+          "gpu": 3,
+          "vram": 2
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/cstr/qwen3-asr-0.6b-GGUF/resolve/79aa968855efd924b8dd6dde3deee949b9e7f052/qwen3-asr-0.6b-q4_k.gguf?download=true",
+          "path": "qwen3-asr/qwen3-asr-0.6b-q4_k.gguf",
+          "sha256": "f63771c02dfa486d9399d41ab6ab8cd2d8ca24e077cd32130ea1f67f4fd8dade",
+          "size": 631026336
+        }
+      ],
+      "variants": [
+        {
+          "id": "qwen3-asr-0.6b-host-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://host.docker.internal:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/qwen3-asr-0.6b-GGUF/resolve/79aa968855efd924b8dd6dde3deee949b9e7f052/qwen3-asr-0.6b-q4_k.gguf?download=true",
+              "path": "qwen3-asr/qwen3-asr-0.6b-q4_k.gguf",
+              "sha256": "f63771c02dfa486d9399d41ab6ab8cd2d8ca24e077cd32130ea1f67f4fd8dade",
+              "size": 631026336
+            }
+          ],
+          "bundled": false,
+          "protocol": "whisper-cpp",
+          "host_profile": "crispasr-qwen3-asr"
+        },
+        {
+          "id": "qwen3-asr-0.6b-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/qwen3-asr-0.6b-GGUF/resolve/79aa968855efd924b8dd6dde3deee949b9e7f052/qwen3-asr-0.6b-q4_k.gguf?download=true",
+              "path": "qwen3-asr/qwen3-asr-0.6b-q4_k.gguf",
+              "sha256": "f63771c02dfa486d9399d41ab6ab8cd2d8ca24e077cd32130ea1f67f4fd8dade",
+              "size": 631026336
+            }
+          ],
+          "bundled": false,
+          "protocol": "whisper-cpp",
+          "host_profile": "crispasr-qwen3-asr"
+        }
+      ]
+    },
+    {
+      "id": "canary-1b-v2",
+      "stage": "asr",
+      "name": "NVIDIA Canary 1B v2",
+      "tag": "multilingual",
+      "description": "NVIDIA Canary 1B v2 (GGUF via CrispASR): 25 europaeische Sprachen mit expliziter Source/Target-Sprache und Speech-Translation. Q4_K ~611 MB.",
+      "protocol": "whisper-cpp",
+      "model": "nvidia/canary-1b-v2",
+      "languages": [
+        "auto",
+        "bg",
+        "hr",
+        "cs",
+        "da",
+        "nl",
+        "en",
+        "et",
+        "fi",
+        "fr",
+        "de",
+        "el",
+        "hu",
+        "it",
+        "lv",
+        "lt",
+        "mt",
+        "pl",
+        "pt",
+        "ro",
+        "sk",
+        "sl",
+        "es",
+        "sv",
+        "ru",
+        "uk"
+      ],
+      "resources": {
+        "vram_gb": 1.5,
+        "ram_gb": 2.5,
+        "stars": {
+          "cpu": 2,
+          "gpu": 3,
+          "vram": 2
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/cstr/canary-1b-v2-GGUF/resolve/5957542e95a8b4941edba76677ea82c65cc14a4d/canary-1b-v2-q4_k.gguf?download=true",
+          "path": "canary/canary-1b-v2-q4_k.gguf",
+          "sha256": "5027f74ba0eb9bb707b14a11c7a68510a704748bb392e5f3af45115329ee501d",
+          "size": 610746016
+        }
+      ],
+      "variants": [
+        {
+          "id": "canary-1b-v2-host-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://host.docker.internal:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/canary-1b-v2-GGUF/resolve/5957542e95a8b4941edba76677ea82c65cc14a4d/canary-1b-v2-q4_k.gguf?download=true",
+              "path": "canary/canary-1b-v2-q4_k.gguf",
+              "sha256": "5027f74ba0eb9bb707b14a11c7a68510a704748bb392e5f3af45115329ee501d",
+              "size": 610746016
+            }
+          ],
+          "bundled": false,
+          "protocol": "whisper-cpp",
+          "host_profile": "crispasr-canary"
+        },
+        {
+          "id": "canary-1b-v2-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/canary-1b-v2-GGUF/resolve/5957542e95a8b4941edba76677ea82c65cc14a4d/canary-1b-v2-q4_k.gguf?download=true",
+              "path": "canary/canary-1b-v2-q4_k.gguf",
+              "sha256": "5027f74ba0eb9bb707b14a11c7a68510a704748bb392e5f3af45115329ee501d",
+              "size": 610746016
+            }
+          ],
+          "bundled": false,
+          "protocol": "whisper-cpp",
+          "host_profile": "crispasr-canary"
+        }
+      ]
+    },
+    {
+      "id": "fun-asr-mlt-nano",
+      "stage": "asr",
+      "name": "Fun-ASR-MLT-Nano",
+      "tag": "multilingual",
+      "description": "FunAudioLLM Fun-ASR-MLT-Nano-2512 (GGUF via CrispASR): 31 Sprachen inkl. DE/FR/ES. Speech-LLM Nano, Q4_K ~897 MB.",
+      "protocol": "whisper-cpp",
+      "model": "FunAudioLLM/Fun-ASR-MLT-Nano-2512",
+      "languages": [
+        "auto",
+        "zh",
+        "en",
+        "yue",
+        "ja",
+        "ko",
+        "vi",
+        "id",
+        "th",
+        "ms",
+        "fil",
+        "ar",
+        "hi",
+        "bg",
+        "hr",
+        "cs",
+        "da",
+        "nl",
+        "et",
+        "fi",
+        "el",
+        "hu",
+        "ga",
+        "lv",
+        "lt",
+        "mt",
+        "pl",
+        "pt",
+        "ro",
+        "sk",
+        "sl",
+        "sv",
+        "de",
+        "fr",
+        "es",
+        "it",
+        "ru"
+      ],
+      "resources": {
+        "vram_gb": 1.5,
+        "ram_gb": 2.5,
+        "stars": {
+          "cpu": 2,
+          "gpu": 3,
+          "vram": 2
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/cstr/funasr-mlt-nano-GGUF/resolve/5ba2e21029b7d88eceb6e4214530eca8e00b9fc6/funasr-mlt-nano-2512-q4_k.gguf?download=true",
+          "path": "funasr/funasr-mlt-nano-2512-q4_k.gguf",
+          "sha256": "2c50bdbd1efad2a4a590c74a884c0bb1e305dedb795d6598e694e6025c2efcbf",
+          "size": 896875328
+        }
+      ],
+      "variants": [
+        {
+          "id": "fun-asr-mlt-nano-host-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://host.docker.internal:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/funasr-mlt-nano-GGUF/resolve/5ba2e21029b7d88eceb6e4214530eca8e00b9fc6/funasr-mlt-nano-2512-q4_k.gguf?download=true",
+              "path": "funasr/funasr-mlt-nano-2512-q4_k.gguf",
+              "sha256": "2c50bdbd1efad2a4a590c74a884c0bb1e305dedb795d6598e694e6025c2efcbf",
+              "size": 896875328
+            }
+          ],
+          "bundled": false,
+          "protocol": "whisper-cpp",
+          "host_profile": "crispasr-funasr-mlt"
+        },
+        {
+          "id": "fun-asr-mlt-nano-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8082",
+          "native_endpoint": "http://127.0.0.1:8082",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/funasr-mlt-nano-GGUF/resolve/5ba2e21029b7d88eceb6e4214530eca8e00b9fc6/funasr-mlt-nano-2512-q4_k.gguf?download=true",
+              "path": "funasr/funasr-mlt-nano-2512-q4_k.gguf",
+              "sha256": "2c50bdbd1efad2a4a590c74a884c0bb1e305dedb795d6598e694e6025c2efcbf",
+              "size": 896875328
+            }
+          ],
+          "bundled": false,
+          "protocol": "whisper-cpp",
+          "host_profile": "crispasr-funasr-mlt"
+        }
+      ]
+    },
+    {
       "id": "supertonic",
       "stage": "tts",
       "name": "Supertonic ONNX",
@@ -918,7 +1288,6 @@
       "protocol": "openai-tts-pcm",
       "model": "qwen3-tts-sycl",
       "default_voice": "Aiden",
-      "voice_mode": "request",
       "voices": [
         "Aiden",
         "Serena",
@@ -930,6 +1299,7 @@
         "Eric",
         "Dylan"
       ],
+      "voice_mode": "request",
       "native_sample_rate": 24000,
       "languages": [
         "auto",
@@ -1069,25 +1439,6 @@
             "windows"
           ],
           "stable": false,
-          "endpoint": "http://host.docker.internal:8083/v1/audio/speech",
-          "native_endpoint": "http://127.0.0.1:8083/v1/audio/speech",
-          "container": "",
-          "image": "",
-          "health_path": "/health",
-          "environment": {
-            "QWEN_CODE_SAMPLER": "host"
-          }
-        },
-        {
-          "id": "qwen3-tts-vulkan-windows-b580",
-          "accelerator": "vulkan",
-          "vendors": [
-            "intel"
-          ],
-          "platforms": [
-            "windows"
-          ],
-          "stable": false,
           "device_match": [
             "arc b580",
             "battlemage",
@@ -1099,10 +1450,356 @@
           "image": "",
           "health_path": "/health",
           "environment": {
-            "GGML_BACKEND": "Vulkan0",
+            "GGML_BACKEND": "SYCL0",
+            "ONEAPI_DEVICE_SELECTOR": "level_zero:0",
+            "GGML_SYCL_ENABLE_FLASH_ATTN": "1",
+            "GGML_SYCL_DISABLE_GRAPH": "1",
+            "GGML_SYCL_PRIORITIZE_DMMV": "1",
+            "GGML_SYCL_DEV2DEV_MEMCPY": "0",
+            "GGML_SYCL_DISABLE_OPT": "0",
+            "GGML_SYCL_DISABLE_DNN": "0",
+            "GGML_SYCL_USE_LEVEL_ZERO_API": "1",
             "QWEN_CODE_SAMPLER": "host"
           },
-          "host_profile": "qwen-vulkan"
+          "host_profile": "qwen-sycl"
+        }
+      ]
+    },
+    {
+      "id": "chatterbox-multilingual-v3",
+      "stage": "tts",
+      "name": "Chatterbox Multilingual V3",
+      "tag": "multilingual",
+      "description": "ResembleAI Chatterbox Multilingual V3 mit 23 Sprachen und eingebauter Stimme. Intel Arc B580 kann experimentell den nativen CrispASR-GGML-Vulkan-Pfad verwenden; CPU und CUDA bleiben als Rückfallpfade erhalten.",
+      "protocol": "openai-tts",
+      "model": "ResembleAI/chatterbox",
+      "default_voice": "default",
+      "voice_mode": "fixed",
+      "native_sample_rate": 24000,
+      "languages": [
+        "ar",
+        "da",
+        "de",
+        "el",
+        "en",
+        "es",
+        "fi",
+        "fr",
+        "he",
+        "hi",
+        "it",
+        "ja",
+        "ko",
+        "ms",
+        "nl",
+        "no",
+        "pl",
+        "pt",
+        "ru",
+        "sv",
+        "sw",
+        "tr",
+        "zh"
+      ],
+      "resources": {
+        "vram_gb": 6.0,
+        "ram_gb": 12.0,
+        "stars": {
+          "cpu": 1,
+          "gpu": 4,
+          "vram": 4
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/ResembleAI/chatterbox/resolve/5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18/ve.pt?download=true",
+          "path": "chatterbox/ve.pt",
+          "sha256": "4b16d836bc598509860f6fa068165a8bb5e9ac84f05582dfcf278a5a372879f1",
+          "size": 5698626
+        },
+        {
+          "source": "https://huggingface.co/ResembleAI/chatterbox/resolve/5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18/t3_mtl23ls_v3.safetensors?download=true",
+          "path": "chatterbox/t3_mtl23ls_v3.safetensors",
+          "sha256": "5abca8321ede76f8e61f1cc0d19aea6c946b28871017ce8726f8a69203f05953",
+          "size": 2143989928
+        },
+        {
+          "source": "https://huggingface.co/ResembleAI/chatterbox/resolve/5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18/s3gen.pt?download=true",
+          "path": "chatterbox/s3gen.pt",
+          "sha256": "9b9ff07e60b20c136e2b1b3d7563a24604e8d2c4c267888d1ee929dd0151d2a3",
+          "size": 1057165844
+        },
+        {
+          "source": "https://huggingface.co/ResembleAI/chatterbox/resolve/5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18/grapheme_mtl_merged_expanded_v1.json?download=true",
+          "path": "chatterbox/grapheme_mtl_merged_expanded_v1.json",
+          "sha256": "69632f47220a788a52ce2661d096453c5655e9bf25289d89a8d832c46ee07dbf",
+          "size": 69989
+        },
+        {
+          "source": "https://huggingface.co/ResembleAI/chatterbox/resolve/5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18/conds.pt?download=true",
+          "path": "chatterbox/conds.pt",
+          "sha256": "6552d70568833628ba019c6b03459e77fe71ca197d5c560cef9411bee9d87f4e",
+          "size": 107374
+        },
+        {
+          "source": "https://huggingface.co/ResembleAI/chatterbox/resolve/5bb1f6ee58e50c3b8d408bc82a6d3740c2db6e18/Cangjie5_TC.json?download=true",
+          "path": "chatterbox/Cangjie5_TC.json",
+          "sha256": "7073fd9de919443ae88e0bd2449917a65fe54898a4413ed1edcc4b67f28bce8c",
+          "size": 1920163
+        }
+      ],
+      "variants": [
+        {
+          "id": "chatterbox-multilingual-v3-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "device_match": [
+            "arc b580"
+          ],
+          "stable": false,
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/chatterbox-GGUF/resolve/0295ba8dee365d84e5de44b818bb27ddfa705c43/chatterbox-t3-q8_0.gguf?download=true",
+              "path": "chatterbox/chatterbox-t3-q8_0.gguf",
+              "sha256": "d87e51da512ad54af66e587e5d5cf83762c407198cc284f825ea220062b9a67e",
+              "size": 639285952
+            },
+            {
+              "source": "https://huggingface.co/cstr/chatterbox-GGUF/resolve/0295ba8dee365d84e5de44b818bb27ddfa705c43/chatterbox-s3gen-q8_0.gguf?download=true",
+              "path": "chatterbox/chatterbox-s3gen-q8_0.gguf",
+              "sha256": "329cd9e3bdb273deae2a81754caeb67d3fe84e41bd308e98e35532645c9c4920",
+              "size": 364538944
+            }
+          ],
+          "endpoint": "http://host.docker.internal:8090/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8090/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {
+            "GGML_BACKEND": "Vulkan0",
+            "CRISPASR_CHATTERBOX_T3_GPU": "0",
+            "CRISPASR_CHATTERBOX_FORCE_GPU": "0"
+          },
+          "host_profile": "crispasr-chatterbox"
+        },
+        {
+          "id": "chatterbox-multilingual-v3-cuda-windows",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://host.docker.internal:8090/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8090/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {
+            "CHATTERBOX_DEVICE": "cuda"
+          },
+          "host_profile": "chatterbox-python"
+        },
+        {
+          "id": "chatterbox-multilingual-v3-cpu-windows",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://host.docker.internal:8090/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8090/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {
+            "CHATTERBOX_DEVICE": "cpu"
+          },
+          "host_profile": "chatterbox-python"
+        }
+      ]
+    },
+    {
+      "id": "xtts-v2",
+      "stage": "tts",
+      "name": "XTTS-v2 ONNX",
+      "tag": "voice cloning",
+      "description": "Coqui XTTS-v2 als experimenteller nativer ONNX-Sidecar. Die Intel-Arc-B580-Variante erzwingt ONNX Runtime WebGPU über Dawn/Vulkan; CPU bleibt als transaktionaler Rückfallpfad erhalten. Nur für nichtkommerzielle Nutzung.",
+      "protocol": "openai-tts",
+      "model": "coqui/XTTS-v2",
+      "default_voice": "de_sample",
+      "voices": [
+        "de_sample"
+      ],
+      "voice_mode": "request",
+      "native_sample_rate": 24000,
+      "languages": [
+        "en",
+        "es",
+        "fr",
+        "de",
+        "it",
+        "pt",
+        "pl",
+        "tr",
+        "ru",
+        "nl",
+        "cs",
+        "ar",
+        "zh-cn",
+        "ja",
+        "hu",
+        "ko",
+        "hi"
+      ],
+      "licenses": [
+        "CC-BY-NC-4.0",
+        "CPML"
+      ],
+      "access_url": "https://huggingface.co/pltobing/XTTSv2-Streaming-ONNX",
+      "resources": {
+        "vram_gb": 8.0,
+        "ram_gb": 12.0,
+        "stars": {
+          "cpu": 5,
+          "gpu": 5,
+          "vram": 5
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/pltobing/XTTSv2-Streaming-ONNX/resolve/975b202585dea4ae6ca7f6118121cdf1011d7d28/xtts_onnx/conditioning_encoder.onnx?download=true",
+          "path": "xtts-v2/onnx/conditioning_encoder.onnx",
+          "sha256": "dbdbdba87fd0839005410fcf10bdebb811db6dbc685892f68793b7a71b65716a",
+          "size": 185357330,
+          "auth": "huggingface"
+        },
+        {
+          "source": "https://huggingface.co/pltobing/XTTSv2-Streaming-ONNX/resolve/975b202585dea4ae6ca7f6118121cdf1011d7d28/xtts_onnx/speaker_encoder.onnx?download=true",
+          "path": "xtts-v2/onnx/speaker_encoder.onnx",
+          "sha256": "accf266e39f77cc4b64ad325b6f05383d6d985556bf0720ccd4d77178595a4c5",
+          "size": 32217896,
+          "auth": "huggingface"
+        },
+        {
+          "source": "https://huggingface.co/pltobing/XTTSv2-Streaming-ONNX/resolve/975b202585dea4ae6ca7f6118121cdf1011d7d28/xtts_onnx/gpt_model.onnx?download=true",
+          "path": "xtts-v2/onnx/gpt_model.onnx",
+          "sha256": "225c0d131429ea38b6afb0062577f1cbaeb82fea68a0bbe0299173a8c5e18442",
+          "size": 1517322481,
+          "auth": "huggingface"
+        },
+        {
+          "source": "https://huggingface.co/pltobing/XTTSv2-Streaming-ONNX/resolve/975b202585dea4ae6ca7f6118121cdf1011d7d28/xtts_onnx/hifigan_vocoder.onnx?download=true",
+          "path": "xtts-v2/onnx/hifigan_vocoder.onnx",
+          "sha256": "f245fed36cf6b2fe659456b464296ef4bfd232be8abe270c4aba7b0617887d2e",
+          "size": 71499198,
+          "auth": "huggingface"
+        },
+        {
+          "source": "https://huggingface.co/pltobing/XTTSv2-Streaming-ONNX/resolve/975b202585dea4ae6ca7f6118121cdf1011d7d28/xtts_onnx/mel_stats.npy?download=true",
+          "path": "xtts-v2/onnx/mel_stats.npy",
+          "sha256": "deb8dba610b4186103fd083a3d747f3bdaaae4cff7f4df2c97779f3bd6606fca",
+          "size": 448,
+          "auth": "huggingface"
+        },
+        {
+          "source": "https://huggingface.co/pltobing/XTTSv2-Streaming-ONNX/resolve/975b202585dea4ae6ca7f6118121cdf1011d7d28/xtts_onnx/embeddings/mel_embedding.npy?download=true",
+          "path": "xtts-v2/onnx/embeddings/mel_embedding.npy",
+          "sha256": "bfdb4a3527ee19e21e46f7027e313c36880729e9a32f0c638340c9eb1c530ab9",
+          "size": 4202624,
+          "auth": "huggingface"
+        },
+        {
+          "source": "https://huggingface.co/pltobing/XTTSv2-Streaming-ONNX/resolve/975b202585dea4ae6ca7f6118121cdf1011d7d28/xtts_onnx/embeddings/mel_pos_embedding.npy?download=true",
+          "path": "xtts-v2/onnx/embeddings/mel_pos_embedding.npy",
+          "sha256": "73d0e4622e10d65c521453c0509dfcfcac5ac222aa1d34a3704c935d57e564e9",
+          "size": 2490496,
+          "auth": "huggingface"
+        },
+        {
+          "source": "https://huggingface.co/pltobing/XTTSv2-Streaming-ONNX/resolve/975b202585dea4ae6ca7f6118121cdf1011d7d28/xtts_onnx/embeddings/text_embedding.npy?download=true",
+          "path": "xtts-v2/onnx/embeddings/text_embedding.npy",
+          "sha256": "23578e2c2e5829cdad40f1d1796ec492714250712631bd87466c1872a893e7d8",
+          "size": 27365504,
+          "auth": "huggingface"
+        },
+        {
+          "source": "https://huggingface.co/pltobing/XTTSv2-Streaming-ONNX/resolve/975b202585dea4ae6ca7f6118121cdf1011d7d28/xtts_onnx/embeddings/text_pos_embedding.npy?download=true",
+          "path": "xtts-v2/onnx/embeddings/text_pos_embedding.npy",
+          "sha256": "3f05d797abb3cc2c2523c6ec59e8127ceb5c2a9a21cda5d1bbc25736b59ed7fe",
+          "size": 1654912,
+          "auth": "huggingface"
+        },
+        {
+          "source": "https://huggingface.co/coqui/XTTS-v2/resolve/6c2b0d75eae4b7047358e3b6bd9325f857d43f77/vocab.json?download=true",
+          "path": "xtts-v2/onnx/vocab.json",
+          "sha256": "928260878a59da8a72a2a5b7687fea29d5106137669d90945430fe17e415304a",
+          "size": 361219
+        },
+        {
+          "source": "https://huggingface.co/coqui/XTTS-v2/resolve/6c2b0d75eae4b7047358e3b6bd9325f857d43f77/samples/de_sample.wav?download=true",
+          "path": "xtts-v2/voices/de_sample.wav",
+          "sha256": "c5c7190fa0ad2f940f31807b9db57ca4917e8ba7fc3dc6c4868c3727c76934a8",
+          "size": 299066
+        }
+      ],
+      "variants": [
+        {
+          "id": "xtts-v2-webgpu-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "device_match": [
+            "arc b580"
+          ],
+          "stable": false,
+          "endpoint": "http://host.docker.internal:8091/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8091/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {
+            "XTTS_PROVIDER": "webgpu-vulkan",
+            "ORT_WEBGPU_DAWN_BACKEND": "Vulkan"
+          },
+          "host_profile": "xtts-webgpu"
+        },
+        {
+          "id": "xtts-v2-cpu-windows",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://host.docker.internal:8091/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8091/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {
+            "XTTS_PROVIDER": "cpu"
+          },
+          "host_profile": "xtts-cpu"
         }
       ]
     },
@@ -1210,7 +1907,6 @@
       "protocol": "openai-tts",
       "model": "vibevoice-realtime-0.5b",
       "default_voice": "emma",
-      "voice_mode": "request",
       "voices": [
         "emma",
         "en-Emma_woman",
@@ -1239,6 +1935,7 @@
         "sp-Spk0_woman",
         "sp-Spk1_man"
       ],
+      "voice_mode": "request",
       "native_sample_rate": 24000,
       "languages": [
         "en",
@@ -1541,10 +2238,10 @@
       "protocol": "openai-tts",
       "model": "bosonai/higgs-tts-3-4b",
       "default_voice": "default",
-      "voice_mode": "request",
       "voices": [
         "default"
       ],
+      "voice_mode": "request",
       "native_sample_rate": 24000,
       "languages": [
         "auto",
@@ -1643,6 +2340,665 @@
           "image": "",
           "health_path": "/v1/models",
           "environment": {}
+        }
+      ]
+    },
+    {
+      "id": "piper",
+      "stage": "tts",
+      "name": "Piper (CrispASR)",
+      "tag": "compact",
+      "description": "Rhasspy Piper via CrispASR GGUF: winzige multilingual TTS (~30 MB/Stimme). Default DE thorsten-medium + EN libritts. OpenAI /v1/audio/speech auf Port 8092.",
+      "protocol": "openai-tts",
+      "model": "piper",
+      "default_voice": "thorsten",
+      "voices": [
+        "thorsten",
+        "libritts"
+      ],
+      "voice_mode": "restart",
+      "native_sample_rate": 22050,
+      "languages": [
+        "de",
+        "en",
+        "fr",
+        "es",
+        "it",
+        "nl",
+        "pl",
+        "pt",
+        "ru",
+        "uk",
+        "sv",
+        "no",
+        "da",
+        "fi",
+        "hu",
+        "cs",
+        "sk",
+        "ro",
+        "bg",
+        "el",
+        "tr",
+        "ar",
+        "zh",
+        "ja",
+        "ko",
+        "hi",
+        "vi",
+        "id",
+        "ms",
+        "ca",
+        "cy"
+      ],
+      "resources": {
+        "vram_gb": 0.2,
+        "ram_gb": 0.5,
+        "stars": {
+          "cpu": 3,
+          "gpu": 1,
+          "vram": 1
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/cstr/piper-voices-GGUF/resolve/b867fa04ece772c1394a15b4060327755724650f/piper-de_DE-thorsten-medium-f16.gguf?download=true",
+          "path": "piper/piper-de_DE-thorsten-medium-f16.gguf",
+          "sha256": "f4fd0cd694f1f6f0192b903ab2ef52bb1692204334526fd32ca9379a9e655f8b",
+          "size": 31418528
+        },
+        {
+          "source": "https://huggingface.co/cstr/piper-voices-GGUF/resolve/b867fa04ece772c1394a15b4060327755724650f/piper-en_US-libritts_r-medium-f16.gguf?download=true",
+          "path": "piper/piper-en_US-libritts_r-medium-f16.gguf",
+          "sha256": "55981bf08006e19c0fc626a487fa8bb71126859052846aaff508c02250c4608b",
+          "size": 18966336
+        }
+      ],
+      "variants": [
+        {
+          "id": "piper-host-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://host.docker.internal:8092/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8092/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/piper-voices-GGUF/resolve/b867fa04ece772c1394a15b4060327755724650f/piper-de_DE-thorsten-medium-f16.gguf?download=true",
+              "path": "piper/piper-de_DE-thorsten-medium-f16.gguf",
+              "sha256": "f4fd0cd694f1f6f0192b903ab2ef52bb1692204334526fd32ca9379a9e655f8b",
+              "size": 31418528
+            },
+            {
+              "source": "https://huggingface.co/cstr/piper-voices-GGUF/resolve/b867fa04ece772c1394a15b4060327755724650f/piper-en_US-libritts_r-medium-f16.gguf?download=true",
+              "path": "piper/piper-en_US-libritts_r-medium-f16.gguf",
+              "sha256": "55981bf08006e19c0fc626a487fa8bb71126859052846aaff508c02250c4608b",
+              "size": 18966336
+            }
+          ],
+          "bundled": false,
+          "host_profile": "crispasr-piper"
+        },
+        {
+          "id": "piper-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8092/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8092/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/piper-voices-GGUF/resolve/b867fa04ece772c1394a15b4060327755724650f/piper-de_DE-thorsten-medium-f16.gguf?download=true",
+              "path": "piper/piper-de_DE-thorsten-medium-f16.gguf",
+              "sha256": "f4fd0cd694f1f6f0192b903ab2ef52bb1692204334526fd32ca9379a9e655f8b",
+              "size": 31418528
+            },
+            {
+              "source": "https://huggingface.co/cstr/piper-voices-GGUF/resolve/b867fa04ece772c1394a15b4060327755724650f/piper-en_US-libritts_r-medium-f16.gguf?download=true",
+              "path": "piper/piper-en_US-libritts_r-medium-f16.gguf",
+              "sha256": "55981bf08006e19c0fc626a487fa8bb71126859052846aaff508c02250c4608b",
+              "size": 18966336
+            }
+          ],
+          "bundled": false,
+          "host_profile": "crispasr-piper"
+        }
+      ]
+    },
+    {
+      "id": "cosyvoice3-0.5b",
+      "stage": "tts",
+      "name": "CosyVoice3 0.5B",
+      "tag": "multilingual",
+      "description": "Fun-CosyVoice3-0.5B (GGUF via CrispASR): 9 Sprachen + Dialekte, baked voices + optional Cloning. ~1.0 GB Artefakte. Port 8093.",
+      "protocol": "openai-tts",
+      "model": "cosyvoice3-0.5b",
+      "default_voice": "fleurs-de",
+      "voices": [
+        "zero_shot",
+        "fleurs-en",
+        "fleurs-de",
+        "fleurs-zh",
+        "fleurs-ja",
+        "fleurs-fr",
+        "fleurs-es",
+        "fleurs-ko"
+      ],
+      "voice_mode": "request",
+      "native_sample_rate": 24000,
+      "languages": [
+        "en",
+        "de",
+        "zh",
+        "ja",
+        "fr",
+        "es",
+        "ko",
+        "it",
+        "ru"
+      ],
+      "resources": {
+        "vram_gb": 1.5,
+        "ram_gb": 2.5,
+        "stars": {
+          "cpu": 2,
+          "gpu": 3,
+          "vram": 2
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-llm-q4_k.gguf?download=true",
+          "path": "cosyvoice3/cosyvoice3-llm-q4_k.gguf",
+          "sha256": "33d899490108bce896c3448bca40ebd994daa125ce0b118e6267f6b84fc09530",
+          "size": 383891200
+        },
+        {
+          "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-flow-q8_0.gguf?download=true",
+          "path": "cosyvoice3/cosyvoice3-flow-q8_0.gguf",
+          "sha256": "ab264405ca243baf9aa2f2f26959d213d3e3ca9fb204db2a0b582ed2ca243d86",
+          "size": 360751936
+        },
+        {
+          "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-hift-f16.gguf?download=true",
+          "path": "cosyvoice3/cosyvoice3-hift-f16.gguf",
+          "sha256": "6df249e52901714f30f9bb163ff47cedfa56f6df3385567b657610eeb8b8cfd3",
+          "size": 41601888
+        },
+        {
+          "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-s3tok-q4_k.gguf?download=true",
+          "path": "cosyvoice3/cosyvoice3-s3tok-q4_k.gguf",
+          "sha256": "0fb0b43516487dff1b52623e7fcbe44b5d27b2df68a5a61d7f4f05012d0a36ca",
+          "size": 145258240
+        },
+        {
+          "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-campplus-f16.gguf?download=true",
+          "path": "cosyvoice3/cosyvoice3-campplus-f16.gguf",
+          "sha256": "f3243551ace3dd0cc73844e2edfd94feea89d2668dad79bcfc9f5800b376c334",
+          "size": 14153600
+        },
+        {
+          "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-voices.gguf?download=true",
+          "path": "cosyvoice3/cosyvoice3-voices.gguf",
+          "sha256": "73b5cac894d8e715d418d0228d2878ad6e836a809ccb85799ff08ae5f63ac6a2",
+          "size": 665472
+        }
+      ],
+      "variants": [
+        {
+          "id": "cosyvoice3-0.5b-host-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://host.docker.internal:8093/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8093/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-llm-q4_k.gguf?download=true",
+              "path": "cosyvoice3/cosyvoice3-llm-q4_k.gguf",
+              "sha256": "33d899490108bce896c3448bca40ebd994daa125ce0b118e6267f6b84fc09530",
+              "size": 383891200
+            },
+            {
+              "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-flow-q8_0.gguf?download=true",
+              "path": "cosyvoice3/cosyvoice3-flow-q8_0.gguf",
+              "sha256": "ab264405ca243baf9aa2f2f26959d213d3e3ca9fb204db2a0b582ed2ca243d86",
+              "size": 360751936
+            },
+            {
+              "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-hift-f16.gguf?download=true",
+              "path": "cosyvoice3/cosyvoice3-hift-f16.gguf",
+              "sha256": "6df249e52901714f30f9bb163ff47cedfa56f6df3385567b657610eeb8b8cfd3",
+              "size": 41601888
+            },
+            {
+              "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-s3tok-q4_k.gguf?download=true",
+              "path": "cosyvoice3/cosyvoice3-s3tok-q4_k.gguf",
+              "sha256": "0fb0b43516487dff1b52623e7fcbe44b5d27b2df68a5a61d7f4f05012d0a36ca",
+              "size": 145258240
+            },
+            {
+              "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-campplus-f16.gguf?download=true",
+              "path": "cosyvoice3/cosyvoice3-campplus-f16.gguf",
+              "sha256": "f3243551ace3dd0cc73844e2edfd94feea89d2668dad79bcfc9f5800b376c334",
+              "size": 14153600
+            },
+            {
+              "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-voices.gguf?download=true",
+              "path": "cosyvoice3/cosyvoice3-voices.gguf",
+              "sha256": "73b5cac894d8e715d418d0228d2878ad6e836a809ccb85799ff08ae5f63ac6a2",
+              "size": 665472
+            }
+          ],
+          "bundled": false,
+          "host_profile": "crispasr-cosyvoice3"
+        },
+        {
+          "id": "cosyvoice3-0.5b-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8093/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8093/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-llm-q4_k.gguf?download=true",
+              "path": "cosyvoice3/cosyvoice3-llm-q4_k.gguf",
+              "sha256": "33d899490108bce896c3448bca40ebd994daa125ce0b118e6267f6b84fc09530",
+              "size": 383891200
+            },
+            {
+              "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-flow-q8_0.gguf?download=true",
+              "path": "cosyvoice3/cosyvoice3-flow-q8_0.gguf",
+              "sha256": "ab264405ca243baf9aa2f2f26959d213d3e3ca9fb204db2a0b582ed2ca243d86",
+              "size": 360751936
+            },
+            {
+              "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-hift-f16.gguf?download=true",
+              "path": "cosyvoice3/cosyvoice3-hift-f16.gguf",
+              "sha256": "6df249e52901714f30f9bb163ff47cedfa56f6df3385567b657610eeb8b8cfd3",
+              "size": 41601888
+            },
+            {
+              "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-s3tok-q4_k.gguf?download=true",
+              "path": "cosyvoice3/cosyvoice3-s3tok-q4_k.gguf",
+              "sha256": "0fb0b43516487dff1b52623e7fcbe44b5d27b2df68a5a61d7f4f05012d0a36ca",
+              "size": 145258240
+            },
+            {
+              "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-campplus-f16.gguf?download=true",
+              "path": "cosyvoice3/cosyvoice3-campplus-f16.gguf",
+              "sha256": "f3243551ace3dd0cc73844e2edfd94feea89d2668dad79bcfc9f5800b376c334",
+              "size": 14153600
+            },
+            {
+              "source": "https://huggingface.co/cstr/cosyvoice3-0.5b-2512-GGUF/resolve/1c0a6465c78eed08eab0fa8568cebddd3027a4e5/cosyvoice3-voices.gguf?download=true",
+              "path": "cosyvoice3/cosyvoice3-voices.gguf",
+              "sha256": "73b5cac894d8e715d418d0228d2878ad6e836a809ccb85799ff08ae5f63ac6a2",
+              "size": 665472
+            }
+          ],
+          "bundled": false,
+          "host_profile": "crispasr-cosyvoice3"
+        }
+      ]
+    },
+    {
+      "id": "omnivoice",
+      "stage": "tts",
+      "name": "OmniVoice",
+      "tag": "multilingual",
+      "description": "k2-fsa OmniVoice (GGUF via CrispASR): 600+ Sprachen, zero-shot Cloning. Q4_K talker + Q8 tokenizer. Port 8094.",
+      "protocol": "openai-tts",
+      "model": "omnivoice",
+      "default_voice": "default",
+      "voice_mode": "fixed",
+      "native_sample_rate": 24000,
+      "languages": [
+        "auto",
+        "en",
+        "de",
+        "fr",
+        "es",
+        "it",
+        "pt",
+        "nl",
+        "pl",
+        "ru",
+        "zh",
+        "ja",
+        "ko",
+        "ar",
+        "hi",
+        "tr",
+        "vi",
+        "id",
+        "th",
+        "sv",
+        "cs",
+        "ro",
+        "uk"
+      ],
+      "resources": {
+        "vram_gb": 1.8,
+        "ram_gb": 3.0,
+        "stars": {
+          "cpu": 2,
+          "gpu": 3,
+          "vram": 2
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/cstr/omnivoice-GGUF/resolve/bd197cd1c020e74c23d19f905ad3cf19b458e1b2/omnivoice-q4_k.gguf?download=true",
+          "path": "omnivoice/omnivoice-q4_k.gguf",
+          "sha256": "a1a9c6fcf0253143581ecaa2ab3dd7084abf1378bec7986da3523e358273dda3",
+          "size": 597547584
+        },
+        {
+          "source": "https://huggingface.co/cstr/omnivoice-GGUF/resolve/bd197cd1c020e74c23d19f905ad3cf19b458e1b2/omnivoice-tokenizer-q8_0.gguf?download=true",
+          "path": "omnivoice/omnivoice-tokenizer-q8_0.gguf",
+          "sha256": "8558f5f37fe33eece14f208a852cc9cd609040a3f76eaff37e1b21da350789c5",
+          "size": 320239104
+        }
+      ],
+      "variants": [
+        {
+          "id": "omnivoice-host-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://host.docker.internal:8094/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8094/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/omnivoice-GGUF/resolve/bd197cd1c020e74c23d19f905ad3cf19b458e1b2/omnivoice-q4_k.gguf?download=true",
+              "path": "omnivoice/omnivoice-q4_k.gguf",
+              "sha256": "a1a9c6fcf0253143581ecaa2ab3dd7084abf1378bec7986da3523e358273dda3",
+              "size": 597547584
+            },
+            {
+              "source": "https://huggingface.co/cstr/omnivoice-GGUF/resolve/bd197cd1c020e74c23d19f905ad3cf19b458e1b2/omnivoice-tokenizer-q8_0.gguf?download=true",
+              "path": "omnivoice/omnivoice-tokenizer-q8_0.gguf",
+              "sha256": "8558f5f37fe33eece14f208a852cc9cd609040a3f76eaff37e1b21da350789c5",
+              "size": 320239104
+            }
+          ],
+          "bundled": false,
+          "host_profile": "crispasr-omnivoice"
+        },
+        {
+          "id": "omnivoice-vulkan-windows-b580",
+          "accelerator": "vulkan",
+          "vendors": [
+            "intel"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "device_match": [
+            "arc b580",
+            "battlemage",
+            "bmg"
+          ],
+          "endpoint": "http://host.docker.internal:8094/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8094/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {},
+          "artifacts": [
+            {
+              "source": "https://huggingface.co/cstr/omnivoice-GGUF/resolve/bd197cd1c020e74c23d19f905ad3cf19b458e1b2/omnivoice-q4_k.gguf?download=true",
+              "path": "omnivoice/omnivoice-q4_k.gguf",
+              "sha256": "a1a9c6fcf0253143581ecaa2ab3dd7084abf1378bec7986da3523e358273dda3",
+              "size": 597547584
+            },
+            {
+              "source": "https://huggingface.co/cstr/omnivoice-GGUF/resolve/bd197cd1c020e74c23d19f905ad3cf19b458e1b2/omnivoice-tokenizer-q8_0.gguf?download=true",
+              "path": "omnivoice/omnivoice-tokenizer-q8_0.gguf",
+              "sha256": "8558f5f37fe33eece14f208a852cc9cd609040a3f76eaff37e1b21da350789c5",
+              "size": 320239104
+            }
+          ],
+          "bundled": false,
+          "host_profile": "crispasr-omnivoice"
+        }
+      ]
+    },
+    {
+      "id": "inflect-micro-v2",
+      "stage": "tts",
+      "name": "Inflect Micro v2 (9.3M)",
+      "tag": "compact",
+      "description": "Owen Song Inflect-Micro-v2: 9.36M EN-only fixed-voice TTS (~37.5 MB FP32), ~6x realtime on CPU. Apache-2.0. OpenAI /v1/audio/speech on port 8095. Not for German.",
+      "protocol": "openai-tts",
+      "model": "inflect-micro-v2",
+      "default_voice": "male",
+      "voice_mode": "fixed",
+      "native_sample_rate": 24000,
+      "languages": [
+        "en"
+      ],
+      "resources": {
+        "vram_gb": 0.0,
+        "ram_gb": 0.5,
+        "stars": {
+          "cpu": 4,
+          "gpu": 1,
+          "vram": 1
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/model.pth?download=true",
+          "path": "inflect-micro-v2/model.pth",
+          "sha256": "3eede065c9ccfa88ade0a5a9a5c23de34afcbbb32213e59aad44d5cf100fdee8",
+          "size": 37529995
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/config.json?download=true",
+          "path": "inflect-micro-v2/config.json",
+          "sha256": "91ba9652f743f65e6be48eaa1aacea1db3d2941f5138ce309f359d4ce14f34e4",
+          "size": 1210
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/inference.py?download=true",
+          "path": "inflect-micro-v2/inference.py",
+          "sha256": "9bccc990aafa8e363a34269367a034fc69d8216f7317650be0e389bdd545eae3",
+          "size": 7311
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/inflect_vits_frontend.py?download=true",
+          "path": "inflect-micro-v2/inflect_vits_frontend.py",
+          "sha256": "70eb4cdb96b2752015f72be984f5e62e0f26d7dc80e708875601702057b95cc2",
+          "size": 2031
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/inflect_nano_v2_frontend.py?download=true",
+          "path": "inflect-micro-v2/inflect_nano_v2_frontend.py",
+          "sha256": "399cba29408d594d655157ab6af925dc12edcd4207cf00595386106e7e53190a",
+          "size": 11892
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/requirements.txt?download=true",
+          "path": "inflect-micro-v2/requirements.txt",
+          "sha256": "03d9af55e5beceee330a9d906c1e3ad2907552bbe0a4d21b7f47e0c7bb95cccd",
+          "size": 150
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/runtime/attentions.py?download=true",
+          "path": "inflect-micro-v2/runtime/attentions.py",
+          "sha256": "dc65085d0e5d67da9f7603c98efad1e27eaf42c572f632a58080a5cc0f577f92",
+          "size": 11780
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/runtime/commons.py?download=true",
+          "path": "inflect-micro-v2/runtime/commons.py",
+          "sha256": "f223dc1df791d2fb2953cfebd7014a7bc2a6ed614c05de6c17c7b44718a42cdd",
+          "size": 4778
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/runtime/inflect_alias_free.py?download=true",
+          "path": "inflect-micro-v2/runtime/inflect_alias_free.py",
+          "sha256": "d2144153504a8986b737f2043468bf8bc73027ae8158cd1d8ca58ef54bf82ea7",
+          "size": 4670
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/runtime/models.py?download=true",
+          "path": "inflect-micro-v2/runtime/models.py",
+          "sha256": "f47a50c3381e7022dbd263c489f3c6b8f6c6c7ebb192729584af0ce0596b7aff",
+          "size": 22039
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/runtime/modules.py?download=true",
+          "path": "inflect-micro-v2/runtime/modules.py",
+          "sha256": "f6514eaf7fab47d866ee0f9da94ca6ab6e45ebaf246151408da20dd14f242a75",
+          "size": 13166
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/runtime/monotonic_align.py?download=true",
+          "path": "inflect-micro-v2/runtime/monotonic_align.py",
+          "sha256": "16ca4890f3e0107250b4a522c0127779994a5a2b99fc35d6a27f93496a72153a",
+          "size": 206
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/runtime/transforms.py?download=true",
+          "path": "inflect-micro-v2/runtime/transforms.py",
+          "sha256": "9d95e518610c35581c4f1c3b4e8eeca91b7c3d6899e7f0ebb86a0387394d3046",
+          "size": 8490
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/runtime/utils.py?download=true",
+          "path": "inflect-micro-v2/runtime/utils.py",
+          "sha256": "db11ba9b5ffd342abffc59229de7575a7d9e23468f91c6398e70eb4e01636716",
+          "size": 7526
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/runtime/text/__init__.py?download=true",
+          "path": "inflect-micro-v2/runtime/text/__init__.py",
+          "sha256": "7f88b1aae463edcb42e1dce6f5c4227b167b3f5a40853bc644c73db015c1e471",
+          "size": 1572
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/runtime/text/cleaners.py?download=true",
+          "path": "inflect-micro-v2/runtime/text/cleaners.py",
+          "sha256": "11dc7325547290e529c597e620f3aaf8d0bd8a2a2987d48eb42d2289534e42d1",
+          "size": 2880
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/runtime/text/symbols.py?download=true",
+          "path": "inflect-micro-v2/runtime/text/symbols.py",
+          "sha256": "e8871acbc37bd79f61ed063a2b3aa20e20555ddec15c6b9f29e1ab05e7f8b776",
+          "size": 642
+        },
+        {
+          "source": "https://huggingface.co/owensong/Inflect-Micro-v2/resolve/1e0f60061e50c6849ce4c79c9aff0887fa631d81/runtime/text/LICENSE?download=true",
+          "path": "inflect-micro-v2/runtime/text/LICENSE",
+          "sha256": "f89accd9d66f6a011f19997d7a21cf71a35ffe2e2d0911b5460cbd0cab52a581",
+          "size": 1053
+        }
+      ],
+      "variants": [
+        {
+          "id": "inflect-micro-v2-host-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": true,
+          "endpoint": "http://host.docker.internal:8095/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8095/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {
+            "S2S_INFLECT_DEVICE": "cpu"
+          },
+          "host_profile": "inflect-python"
+        },
+        {
+          "id": "inflect-micro-v2-host-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://host.docker.internal:8095/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8095/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {
+            "S2S_INFLECT_DEVICE": "cuda"
+          },
+          "host_profile": "inflect-python"
         }
       ]
     },
@@ -1793,21 +3149,55 @@
       "name": "Sofort startklar",
       "asr_id": "fw-tiny",
       "tts_id": "supertonic",
-      "llm_id": "local-fallback"
+      "llm_id": "local-fallback",
+      "languages": ["de", "en", "fr", "es"],
+      "max_vram_gb": 2.0,
+      "latency_hint": "low",
+      "quality_hint": "balanced"
     },
     {
       "id": "quality-intel",
       "name": "Quality Intel",
       "asr_id": "fw-small",
       "tts_id": "qwen3-tts-0.6b",
-      "llm_id": "local-fallback"
+      "llm_id": "local-fallback",
+      "languages": ["de", "en"],
+      "max_vram_gb": 4.0,
+      "latency_hint": "medium",
+      "quality_hint": "high"
     },
     {
       "id": "minimal",
       "name": "Minimal",
       "asr_id": "fw-tiny",
       "tts_id": "supertonic",
-      "llm_id": "local-fallback"
+      "llm_id": "local-fallback",
+      "languages": ["de", "en"],
+      "max_vram_gb": 1.5,
+      "latency_hint": "low",
+      "quality_hint": "basic"
+    },
+    {
+      "id": "multilingual-8gb",
+      "name": "Multilingual 8GB",
+      "asr_id": "qwen3-asr-0.6b",
+      "tts_id": "piper",
+      "llm_id": "local-fallback",
+      "languages": ["de", "en", "fr", "es", "it"],
+      "max_vram_gb": 8.0,
+      "latency_hint": "medium",
+      "quality_hint": "multilingual"
+    },
+    {
+      "id": "english-compact",
+      "name": "English compact",
+      "asr_id": "fw-tiny",
+      "tts_id": "inflect-micro-v2",
+      "llm_id": "local-fallback",
+      "languages": ["en"],
+      "max_vram_gb": 2.0,
+      "latency_hint": "low",
+      "quality_hint": "compact"
     }
   ]
 }

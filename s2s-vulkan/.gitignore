@@ -4,6 +4,12 @@
 # Local model weights (never commit)
 models/
 models/supertonic/
+data/
+tools/CrispASR/
+tools/chatterbox/
+tools/inflect/
+tools/xtts-v2/
+tools/llama.cpp/
 *.gguf
 *.bin
 *.onnx

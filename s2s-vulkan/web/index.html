@@ -120,6 +120,28 @@
     </div>
     <p class="model-dialog-copy" id="model-dialog-copy"></p>
     <p class="model-dialog-size" id="model-dialog-size"></p>
+    <div class="model-dialog-hf" id="model-dialog-hf" hidden>
+      <p class="model-dialog-hf-note">
+        Dieses Modell braucht Hugging-Face-Zugang.
+        <a id="model-dialog-hf-link" href="#" target="_blank" rel="noopener noreferrer"
+          >Nutzungsbedingungen akzeptieren</a
+        >, dann Token hier eintragen (nur serverseitig für den Download, nie im Katalog).
+      </p>
+      <label class="model-dialog-hf-label" for="model-dialog-hf-token">Hugging Face Token</label>
+      <input
+        type="password"
+        class="model-dialog-hf-input"
+        id="model-dialog-hf-token"
+        name="hf_token"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="hf_…"
+      />
+      <label class="model-dialog-hf-remember">
+        <input type="checkbox" id="model-dialog-hf-remember" checked />
+        Token für diese Lab-Sitzung merken
+      </label>
+    </div>
     <div class="model-progress" id="model-progress" hidden>
       <div class="model-progress-track">
         <i id="model-progress-fill"></i>
@@ -170,7 +192,10 @@
         <summary><span>Stack · ASR / TTS / LLM</span></summary>
         <p class="stack-note">
           Presets und Engines — <strong>Hot-swap live</strong> über WebSocket.
+          Badges <strong>Empfohlen</strong> sind System-Heuristiken (kein Benchmark);
+          du wählst selbst.
         </p>
+        <p class="capability-line" id="capability-line" hidden></p>
 
         <div class="preset-row">
           <span class="preset-label">Presets</span>

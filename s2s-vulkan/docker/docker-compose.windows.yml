@@ -15,10 +15,15 @@ services:
       GGML_BACKEND: CPU
       S2S_DATA_DIR: /data
       S2S_LAB_PLATFORM: windows
-      S2S_LAB_GPU_VENDOR: ${S2S_LAB_GPU_VENDOR:-intel}
-      S2S_LAB_DEVICE_NAME: ${S2S_LAB_DEVICE_NAME:-Intel Arc B580}
-      S2S_LAB_ACCELERATORS: ${S2S_LAB_ACCELERATORS:-vulkan,cpu}
+      # Use overlay-specific inputs so stale Linux/SYCL values from .env do not
+      # bypass the native Windows Vulkan supervisor.
+      S2S_LAB_GPU_VENDOR: ${S2S_WINDOWS_LAB_GPU_VENDOR:-intel}
+      S2S_LAB_DEVICE_NAME: ${S2S_WINDOWS_LAB_DEVICE_NAME:-Intel Arc B580}
+      S2S_LAB_ACCELERATORS: ${S2S_WINDOWS_LAB_ACCELERATORS:-vulkan,sycl,cpu}
       S2S_ALLOW_EXPERIMENTAL: ${S2S_ALLOW_EXPERIMENTAL:-false}
+      # Server-side only. Used for catalog artifacts marked auth=huggingface;
+      # never returned by the catalog API or written to Lab events.
+      HF_TOKEN: ${HF_TOKEN:-}
     volumes:
       - "${S2S_MODELS_HOST_DIR:-./models}:/models"
       - "${S2S_DATA_HOST_DIR:-./data}:/data"

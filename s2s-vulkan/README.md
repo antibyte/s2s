@@ -55,6 +55,19 @@ health and warmup events, and stores ASR (latency/WER/CER), LLM
 `s2s-lab-data` volume. TTS samples additionally support blind 1–5 ratings.
 Benchmark JSON/CSV is available below `/api/v1/benchmarks`.
 
+AuraGo integration (capability profile, suggestions, planned gateway) is documented in
+[`docs/aurago-integration.md`](docs/aurago-integration.md). The orchestrator exposes:
+
+- `GET /api/v1/capability` — RAM/VRAM (best effort), host-agent status, capacity `tier`
+- `GET /api/v1/suggestions?language=de&stable_only=true` — heuristic ASR+TTS presets/pairs
+  (not benchmarks; user still chooses via `PUT /api/v1/stack`)
+- Stable live gateway (paths fixed across stack switches):
+  - `POST /v1/audio/transcriptions` (alias `/api/v1/asr`)
+  - `POST /v1/audio/speech` (alias `/api/v1/tts`)
+  - `GET /ready`, `GET /health`
+- Lab UI shows system tier + **Empfohlen** badges from suggestions (manual pick still)
+- AuraGo production: `S2S_LAB_IDLE_UNLOAD_SECS=0` (see `.env.example` and `docs/aurago-integration.md`)
+
 `faster-whisper tiny`, Supertonic and Granite 3.3 2B Q4 are immutable parts of
 their respective images and form the first active stack. All other weights are
 absent in a fresh model volume. Selecting one opens a size confirmation; only
@@ -104,6 +117,60 @@ Catalog id: `voxtral-mini-4b-realtime` —
 docker build -f docker/Dockerfile.voxtral --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130 -t s2s-asr-voxtral:cuda .
 # orchestrator:
 #   --whisper-url http://127.0.0.1:8087
+```
+
+### Inflect Micro v2 (9.3M EN TTS)
+
+Catalog id: `inflect-micro-v2` —
+[owensong/Inflect-Micro-v2](https://huggingface.co/owensong/Inflect-Micro-v2)
+(Apache-2.0).
+
+- English-only, one fixed male voice, ~37.5 MB FP32 (~9.36M params).
+- Python OpenAI sidecar on port **8095**; host profile `inflect-python`.
+- Fits the ≤8 GB stack (CPU, near-zero VRAM).
+- Setup: `.\scripts\setup_inflect.ps1`, then host agent + Lab download/switch.
+- Preset: **`english-compact`** (fw-tiny + Inflect + Granite).
+
+**Not for German.** Prefer Piper / CosyVoice / Qwen3-TTS for DE.
+
+```powershell
+.\scripts\setup_inflect.ps1
+.\scripts\host_idle_agent.ps1
+# Lab: download Inflect-Micro-v2 artifacts, select TTS, speak English
+```
+
+### Multilingual CrispASR backends (8 GB-friendly)
+
+Optional catalog backends served by the existing Windows host agent and
+[CrispASR](https://github.com/CrispStrobe/CrispASR) (`S2S_HOST_CRISPASR_EXE`).
+They use the same HTTP contracts as the rest of the lab (`POST /inference` for
+ASR, OpenAI `POST /v1/audio/speech` for TTS). LLM stays **Granite 2B** and/or
+**external OpenAI/Ollama**.
+
+| Catalog id | Stage | Host profile | Port | Notes |
+|------------|-------|--------------|------|--------|
+| `qwen3-asr-0.6b` | ASR | `crispasr-qwen3-asr` | 8082 | ~30 languages, Q4_K ~631 MB |
+| `canary-1b-v2` | ASR | `crispasr-canary` | 8082 | 25 EU + speech translation, Q4_K ~611 MB |
+| `fun-asr-mlt-nano` | ASR | `crispasr-funasr-mlt` | 8082 | 31 languages, Q4_K ~897 MB |
+| `piper` | TTS | `crispasr-piper` | **8092** | ~30 MB voices (DE thorsten + EN libritts) |
+| `cosyvoice3-0.5b` | TTS | `crispasr-cosyvoice3` | **8093** | 9 languages + dialects, baked voices |
+| `omnivoice` | TTS | `crispasr-omnivoice` | **8094** | 600+ languages + tokenizer |
+
+Preset: **`multilingual-8gb`** → Qwen3-ASR + Piper + local Granite.
+
+Host-CPU variants are **Windows-only** and stable when the host agent is running
+(Linux Docker does not advertise them — there is no host agent path yet). Vulkan
+(Arc B580) variants remain experimental (`S2S_ALLOW_EXPERIMENTAL=true`). ASR
+profiles share port **8082** (one active ASR at a time), like Whisper/Parakeet.
+Host launches use `-l auto` for multilingual defaults; TTS requests WAV for
+Piper/CosyVoice3/OmniVoice (not raw PCM).
+
+```powershell
+.\scripts\host_idle_agent.ps1
+# Lab: download model artifacts, then switch ASR/TTS in the UI
+# or point the orchestrator directly:
+#   --whisper-url http://127.0.0.1:8082
+#   --tts http --tts-url http://127.0.0.1:8092/v1/audio/speech
 ```
 
 ### Qwen Intel SYCL
@@ -163,6 +230,9 @@ any existing named-volume data without deleting or overwriting it:
 $env:S2S_MODELS_HOST_DIR = "$PWD\models"
 $env:S2S_DATA_HOST_DIR = "$PWD\data"
 $env:S2S_ALLOW_EXPERIMENTAL = "true"
+$env:S2S_WINDOWS_LAB_ACCELERATORS = "vulkan,sycl,cpu"
+$env:S2S_HOST_QWEN_SYCL_EXE = "D:\tools\qwentts\build-sycl\bin\Release\tts-server.exe"
+$env:S2S_ONEAPI_ROOT = "D:\Intel\oneAPI"
 .\scripts\host_idle_agent.ps1
 ```
 
@@ -177,7 +247,7 @@ The agent reports `vulkaninfo` device data and configured profiles in
 `data\host-agent\status.json`. It accepts only UUID command files emitted by the
 controller, fixed backend/profile/port combinations, configured executables and
 model paths below `S2S_MODELS_HOST_DIR`. Unknown commands and unmanaged port
-owners are rejected. Vulkan variants remain hidden unless
+owners are rejected. Experimental variants remain hidden unless
 `S2S_ALLOW_EXPERIMENTAL=true`; Higgs has no Vulkan variant.
 
 ### 1. Build this app
@@ -365,7 +435,7 @@ Turn taking: after VAD emits a final segment, listening pauses until TTS signals
 |--------|--------|-----|
 | `auto` (default) | Supertonic if models present, else system | — |
 | `supertonic` | Supertonic 3 (ONNX Runtime CPU; optional native WebGPU/Dawn Vulkan sidecar) | CPU / experimental Vulkan |
-| `http` | External server (Qwen3/qwentts, Kokoro, **Higgs TTS 3**, `supertonic serve`, …) | depends on server |
+| `http` | External server (Qwen3/qwentts, Kokoro, Chatterbox, **Higgs TTS 3**, `supertonic serve`, …) | depends on server |
 | `piper` | Piper CLI | CPU |
 | `system` | Windows SAPI / espeak-ng | CPU |
 
@@ -396,6 +466,80 @@ Catalog id: `vibevoice-realtime-0.5b` —
 .\scripts\start_vibevoice.ps1 -Build
 # --tts http --tts-url http://127.0.0.1:8089/v1/audio/speech --tts-model vibevoice-realtime-0.5b
 ```
+
+### Chatterbox Multilingual V3 (experimental lab backend)
+
+Catalog id: `chatterbox-multilingual-v3` —
+[ResembleAI/chatterbox](https://huggingface.co/ResembleAI/chatterbox)
+([official runtime](https://github.com/resemble-ai/chatterbox), MIT).
+
+- Multilingual V3 supports 23 languages including German and emits 24 kHz audio.
+- Intel Arc B580 can use the experimental native
+  [CrispASR](https://github.com/CrispStrobe/CrispASR) GGML Vulkan variant.
+  It keeps the autoregressive T3 stage on CPU because this CrispASR build
+  documents a Vulkan step-graph crash there, while S3Gen runs on Vulkan.
+  This is a genuine hybrid Vulkan path, not a silent CPU-only fallback.
+- The official PyTorch CPU/CUDA variants remain available as fallbacks. NVIDIA
+  continues to select CUDA; other Windows GPUs select CPU until separately
+  qualified.
+- The catalog pins every required model file to a revision, byte size and
+  SHA-256. With experimental variants enabled, the Lab UI downloads the two
+  Vulkan GGUFs for an Arc B580. The isolated Python runtime is only required
+  for the CPU/CUDA variants:
+
+```powershell
+$env:S2S_ALLOW_EXPERIMENTAL = "true"
+.\scripts\host_idle_agent.ps1
+
+# CPU/CUDA fallback only:
+.\scripts\setup_chatterbox.ps1
+```
+
+The supervisor starts the OpenAI-compatible sidecar at
+`http://127.0.0.1:8090/v1/audio/speech`. The Vulkan variant uses the
+`crispasr-chatterbox` host profile; CPU/CUDA use `chatterbox-python`. Both use
+the bundled voice. Restart a previously running host agent after updating so it
+advertises the new Vulkan profile.
+
+### XTTS-v2 ONNX (experimental voice-cloning backend)
+
+Catalog id: `xtts-v2` —
+[coqui/XTTS-v2](https://huggingface.co/coqui/XTTS-v2) with the gated
+[XTTSv2 Streaming ONNX conversion](https://huggingface.co/pltobing/XTTSv2-Streaming-ONNX).
+The conversion is CC BY-NC 4.0 and is therefore not enabled for commercial use.
+
+- Output is mono PCM/WAV at 24 kHz. The catalog exposes all 17 supported
+  languages, including German.
+- `xtts-v2-webgpu-vulkan-windows-b580` uses ONNX Runtime 1.28's native WebGPU
+  plugin with Dawn forced to `Vulkan`, one shared Intel Arc B580 device and
+  graph capture disabled for the dynamic GPT shapes. It is never considered
+  healthy when Dawn reports D3D12 or GPT/HiFiGAN falls back completely to CPU.
+- `xtts-v2-cpu-windows` uses the same FP32 ONNX files and is the rollback
+  target when Vulkan activation fails. Both variants require
+  `S2S_ALLOW_EXPERIMENTAL=true`.
+- Voice names are safe ids from `models\xtts-v2\voices\*.wav`; arbitrary paths
+  are rejected. `de_sample.wav` is the pinned default. Adding an administrative
+  WAV file adds its stem to the Lab voice list. Deleting model artifacts does
+  not remove other user-provided voice WAVs.
+- Accept the gated repository terms. Provide a Hugging Face token either in the
+  Lab UI download dialog (recommended) or via `HF_TOKEN` / `S2S_HF_TOKEN` in the
+  server/Compose environment. The catalog never returns the token. Then create
+  the isolated CPython 3.11 runtime if you use the host Python path:
+
+```powershell
+# Optional server-side token (UI entry is preferred for day-to-day use):
+$env:HF_TOKEN = "hf_..."
+$env:S2S_ALLOW_EXPERIMENTAL = "true"
+.\scripts\setup_xtts_v2.ps1
+.\scripts\host_idle_agent.ps1
+```
+
+The setup uses the hash-locked Windows dependency manifest, verifies the
+upstream Python sources and `metadata.json` against their pinned Git blob ids,
+and never prints the token. The Lab catalog independently verifies every large
+ONNX artifact by byte size and SHA-256. The sidecar listens on
+`http://127.0.0.1:8091/v1/audio/speech`; `/health` reports provider, Dawn
+backend, adapter ids and WebGPU/CPU node counts per session.
 
 ### Higgs TTS 3 4B (optional lab backend)
 
@@ -575,7 +719,7 @@ docker compose run --rm \
 | `S2S_LLM_HF_FILE` | `granite-3.3-2b-instruct-q4_k_m.gguf` | File on repo |
 | `S2S_LLM_MODEL_URL` | — | Direct URL override |
 | `S2S_DOWNLOAD_EXTRA` | — | `url=>relpath,url2\|relpath2` |
-| `S2S_HF_TOKEN` / `HF_TOKEN` | — | Gated HF models |
+| `S2S_HF_TOKEN` / `HF_TOKEN` | — | Optional server-side gated HF access (UI download dialog can also supply a token); never exposed through the catalog API |
 | `S2S_MODELS_DIR` | `/models` | Volume mount path |
 
 Examples of controller-managed optional model paths:

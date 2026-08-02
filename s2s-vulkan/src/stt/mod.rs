@@ -194,20 +194,22 @@ fn parse_whisper_response(body: &str) -> Result<String> {
         .to_string())
 }
 
-/// Health probe for whisper-server.
+/// Health probe for whisper-server / CrispASR HTTP.
 pub async fn health_check(base: &str) -> bool {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
         .build()
         .ok();
     let Some(client) = client else { return false };
-    let url = format!("{}/", base.trim_end_matches('/'));
-    match client.get(&url).send().await {
-        Ok(r) => r.status().is_success(),
-        Err(_) => {
-            // Some builds only expose /inference — try OPTIONS/GET on inference is useless;
-            // treat connection refusal as down, anything else as up-ish.
-            false
+    let base = base.trim_end_matches('/');
+    // CrispASR exposes /health; whisper.cpp often only answers on /.
+    for path in ["/health", "/"] {
+        let url = format!("{base}{path}");
+        match client.get(&url).send().await {
+            Ok(r) if r.status().is_success() => return true,
+            Ok(_) => continue,
+            Err(_) => continue,
         }
     }
+    false
 }

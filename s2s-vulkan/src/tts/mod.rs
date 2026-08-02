@@ -287,8 +287,12 @@ pub async fn run_tts(
                 }
 
                 let tts_lang = cfg.resolve_tts_language(chunk.language.as_deref());
-                // qwentts wants full names (german), Supertonic wants ISO (de).
-                let http_lang = Config::qwen_tts_language(&tts_lang);
+                // Qwen wants full names (german); Supertonic / OpenAI-style want ISO (de).
+                let http_lang = if http_is_qwen(&cfg) {
+                    Config::qwen_tts_language(&tts_lang)
+                } else {
+                    iso_tts_language(&tts_lang)
+                };
                 let t0 = Instant::now();
 
                 // HTTP/Qwen: buffer full sentence PCM then play (RTF may be >1).
@@ -437,7 +441,7 @@ async fn synthesize(
     }
 }
 
-/// Prefer WAV for Kokoro / Higgs (clean headers / correct rate); PCM for Qwen-style servers.
+/// Prefer WAV for Kokoro / Higgs / CrispASR TTS; PCM for Qwen-style servers.
 fn http_wants_pcm(cfg: &Config) -> bool {
     let m = cfg.tts_model.to_ascii_lowercase();
     let u = cfg.tts_url.to_ascii_lowercase();
@@ -449,11 +453,26 @@ fn http_wants_pcm(cfg: &Config) -> bool {
     if m.contains("higgs") || u.contains("higgs") || u.contains("8086") || u.contains("tts-higgs") {
         return false;
     }
-    // CrispASR VibeVoice defaults to WAV (24 kHz mono).
+    // CrispASR VibeVoice / Piper / CosyVoice3 / OmniVoice default to WAV mono.
     if m.contains("vibevoice")
         || u.contains("vibevoice")
         || u.contains("8089")
         || u.contains("tts-vibevoice")
+        || m.contains("piper")
+        || u.contains(":8092")
+        || u.ends_with(":8092")
+        || m.contains("cosyvoice")
+        || u.contains("cosyvoice")
+        || u.contains(":8093")
+        || u.ends_with(":8093")
+        || m.contains("omnivoice")
+        || u.contains("omnivoice")
+        || u.contains(":8094")
+        || u.ends_with(":8094")
+        || m.contains("inflect")
+        || u.contains("inflect")
+        || u.contains(":8095")
+        || u.ends_with(":8095")
     {
         return false;
     }
@@ -509,17 +528,23 @@ async fn stream_http(
     };
     let want_pcm = http_wants_pcm(cfg);
     let fmt = if want_pcm { "pcm" } else { "wav" };
+    // Send OpenAI-style `input` only. Supertonic (and other axum/serde handlers with
+    // `alias = "text"` on `input`) reject bodies that contain both `input` and `text`
+    // as "duplicate field `input`".
     let mut body = serde_json::json!({
         "model": model,
         "input": text,
-        "text": text,
         "language": lang,
-        "lang": lang,
         "voice": cfg.supertonic_voice,
         "response_format": fmt,
     });
+    apply_preloaded_voice_policy(&mut body, model);
     if http_is_qwen(cfg) {
         body["max_new_tokens"] = serde_json::Value::from(qwen_frame_limit(cfg));
+        // Qwen's default seed is random and can occasionally turn short German
+        // prompts into non-lexical vocalizations. Seed 0 is deterministic and
+        // passed the B580 SYCL speech/transcription probe.
+        body["seed"] = serde_json::Value::from(0);
     }
     if http_is_higgs(cfg) {
         // Higgs multi-codebook steps (not Qwen codec frames). Cookbook default ≈ 1024.
@@ -1017,16 +1042,15 @@ async fn synthesize_http(
     } else {
         cfg.tts_model.as_str()
     };
-    // Common keys used by OpenAI-style TTS, Qwen wrappers, Kokoro, Higgs, supertonic serve.
+    // OpenAI-style TTS: single `input` field (not both input+text — serde alias clash).
     let mut body = serde_json::json!({
         "model": model,
         "input": text,
-        "text": text,
         "language": lang,
-        "lang": lang,
         "voice": cfg.supertonic_voice,
         "response_format": "wav",
     });
+    apply_preloaded_voice_policy(&mut body, model);
     if http_is_higgs(cfg) {
         body["max_new_tokens"] = serde_json::Value::from(1024u32);
         body["temperature"] = serde_json::json!(0.8);
@@ -1282,6 +1306,66 @@ mod tests {
         assert_eq!(qwen_frame_limit(&cfg), 256);
         cfg.tts_http_max_new_tokens = 0;
         assert_eq!(qwen_frame_limit(&cfg), 1);
+    }
+
+    #[test]
+    fn preloaded_voice_requests_omit_external_voice_references() {
+        let mut kokoro = serde_json::json!({"model": "kokoro", "voice": "af_bella"});
+        apply_preloaded_voice_policy(&mut kokoro, "kokoro");
+        assert!(kokoro.get("voice").is_none());
+
+        let mut chatterbox =
+            serde_json::json!({"model": "ResembleAI/chatterbox", "voice": "default"});
+        apply_preloaded_voice_policy(&mut chatterbox, "ResembleAI/chatterbox");
+        assert!(chatterbox.get("voice").is_none());
+
+        let mut piper = serde_json::json!({"model": "piper", "voice": "thorsten"});
+        apply_preloaded_voice_policy(&mut piper, "piper");
+        assert!(piper.get("voice").is_none());
+
+        let mut omnivoice = serde_json::json!({"model": "omnivoice", "voice": "default"});
+        apply_preloaded_voice_policy(&mut omnivoice, "omnivoice");
+        assert!(omnivoice.get("voice").is_none());
+
+        let mut inflect = serde_json::json!({"model": "inflect-micro-v2", "voice": "male"});
+        apply_preloaded_voice_policy(&mut inflect, "inflect-micro-v2");
+        assert!(inflect.get("voice").is_none());
+
+        // CosyVoice baked bank names must remain on the wire.
+        let mut cosy = serde_json::json!({"model": "cosyvoice3-0.5b", "voice": "fleurs-de"});
+        apply_preloaded_voice_policy(&mut cosy, "cosyvoice3-0.5b");
+        assert_eq!(cosy["voice"], "fleurs-de");
+
+        let mut qwen = serde_json::json!({"model": "qwen", "voice": "Aiden"});
+        apply_preloaded_voice_policy(&mut qwen, "qwen");
+        assert_eq!(qwen["voice"], "Aiden");
+    }
+
+    #[test]
+    fn crispasr_tts_endpoints_request_wav_not_pcm() {
+        use clap::Parser;
+        let mut cfg = Config::parse_from(["s2s-vulkan"]);
+        cfg.tts = TtsBackend::Http;
+
+        cfg.tts_model = "piper".into();
+        cfg.tts_url = "http://127.0.0.1:8092/v1/audio/speech".into();
+        assert!(!http_wants_pcm(&cfg));
+
+        cfg.tts_model = "cosyvoice3-0.5b".into();
+        cfg.tts_url = "http://127.0.0.1:8093/v1/audio/speech".into();
+        assert!(!http_wants_pcm(&cfg));
+
+        cfg.tts_model = "omnivoice".into();
+        cfg.tts_url = "http://127.0.0.1:8094/v1/audio/speech".into();
+        assert!(!http_wants_pcm(&cfg));
+
+        cfg.tts_model = "inflect-micro-v2".into();
+        cfg.tts_url = "http://127.0.0.1:8095/v1/audio/speech".into();
+        assert!(!http_wants_pcm(&cfg));
+
+        cfg.tts_model = "qwen3-tts-sycl".into();
+        cfg.tts_url = "http://127.0.0.1:8083/v1/audio/speech".into();
+        assert!(http_wants_pcm(&cfg));
     }
 
     #[tokio::test]
