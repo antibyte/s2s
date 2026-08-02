@@ -174,7 +174,12 @@ fn infer_asr_id(cfg: &Config) -> String {
         "voxtral-mini-4b-realtime".into()
     } else if url.contains("parakeet") {
         "parakeet-tdt-0.6b-v3".into()
-    } else if url.contains("whisper-tiny") {
+    } else if url.contains("whisper-tiny")
+        // The managed AuraGo bundle uses role-specific container names. Keep
+        // the URL-to-catalog mapping explicit so the bundled tiny model is
+        // not mistaken for the generic 8082/base endpoint.
+        || url.contains("aurago-speech-lab-asr")
+    {
         "fw-tiny".into()
     } else if url.contains("whisper-small") {
         "fw-small".into()
@@ -207,7 +212,10 @@ fn infer_tts_id(cfg: &Config) -> String {
                 || u.contains("tts-higgs")
             {
                 "higgs-tts-3-4b".into()
-            } else if u.contains("supertonic") || m.contains("supertonic") {
+            } else if u.contains("supertonic")
+                || m.contains("supertonic")
+                || u.contains("aurago-speech-lab-tts")
+            {
                 "supertonic".into()
             } else if u.contains("qwen") || m.contains("qwen") || u.contains("8083") {
                 "qwen3-tts-0.6b".into()
@@ -225,6 +233,10 @@ fn infer_llm_id(cfg: &Config) -> String {
         .llm_base_url
         .to_ascii_lowercase()
         .contains("llama-fallback")
+        || cfg
+            .llm_base_url
+            .to_ascii_lowercase()
+            .contains("aurago-speech-lab-llm")
     {
         return "local-fallback".into();
     }
@@ -697,6 +709,18 @@ mod tests {
         config.tts_url = "http://host.docker.internal:8091/v1/audio/speech".into();
         config.tts_model = "coqui/XTTS-v2".into();
         assert_eq!(infer_tts_id(&config), "xtts-v2");
+    }
+
+    #[test]
+    fn managed_bundle_endpoints_map_to_stable_catalog_ids() {
+        let mut config = Config::parse_from(["s2s-vulkan"]);
+        config.whisper_url = "http://aurago-speech-lab-asr:8082".into();
+        config.llm_base_url = "http://aurago-speech-lab-llm:8081/v1".into();
+        config.tts = TtsBackend::Http;
+        config.tts_url = "http://aurago-speech-lab-tts:8083/v1/audio/speech".into();
+        assert_eq!(infer_asr_id(&config), "fw-tiny");
+        assert_eq!(infer_tts_id(&config), "supertonic");
+        assert_eq!(infer_llm_id(&config), "local-fallback");
     }
 
     #[tokio::test]

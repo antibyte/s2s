@@ -26,7 +26,7 @@
     {"role": "tts", "image": "tts", "health_path": "/health", "port": 8083,
       "command": ["--mode", "tts-server", "--host", "0.0.0.0", "--port", "8083", "--skip-health", "--supertonic-model-dir", "/opt/s2s-models/supertonic/onnx", "--supertonic-voice", "M1", "--tts-sample-rate", "16000"]},
     {"role": "gateway", "image": "gateway", "health_path": "/health", "port": 8765,
-      "command": ["--mode", "lab", "--host", "0.0.0.0", "--port", "8765", "--tts", "http", "--tts-url", "http://aurago-speech-lab-tts:8083/v1/audio/speech", "--llm-base-url", "http://aurago-speech-lab-llm:8081/v1", "--whisper-url", "http://aurago-speech-lab-asr:8082"]},
+      "command": ["--mode", "lab", "--host", "0.0.0.0", "--port", "8765", "--tts", "http", "--tts-url", "http://supertonic:8083/v1/audio/speech", "--llm-base-url", "http://llama-fallback:8081/v1", "--whisper-url", "http://whisper-tiny:8082"]},
     {"role": "web", "image": "web", "health_path": "/", "port": 80}
   ],
   "stable_backends": {
