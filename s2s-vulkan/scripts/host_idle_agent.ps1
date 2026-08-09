@@ -16,6 +16,7 @@
 #   S2S_HOST_CHATTERBOX_PYTHON
 #   S2S_HOST_XTTS_PYTHON
 #   S2S_HOST_INFLECT_PYTHON
+#   S2S_HOST_AUDIO8_PYTHON
 #   S2S_ONEAPI_ROOT
 #
 # Compatibility: idle-unload.request and idle-reload.request are still handled.
@@ -162,6 +163,9 @@ $Script:XTTSPython = Get-ConfiguredExecutable `
 $Script:InflectPython = Get-ConfiguredExecutable `
     -EnvironmentName "S2S_HOST_INFLECT_PYTHON" `
     -DefaultPath (Join-Path $Script:Root "tools\inflect\.venv\Scripts\python.exe")
+$Script:Audio8Python = Get-ConfiguredExecutable `
+    -EnvironmentName "S2S_HOST_AUDIO8_PYTHON" `
+    -DefaultPath (Join-Path $Script:Root "tools\audio8\.venv\Scripts\python.exe")
 
 function New-Profile {
     param(
@@ -291,6 +295,14 @@ $Script:Profiles = @{
         -VariantIds @(
             "inflect-micro-v2-host-cpu",
             "inflect-micro-v2-host-cuda"
+        )
+    "audio8-python" = New-Profile `
+        -Name "audio8-python" -Stage "tts" -Port 8096 `
+        -Executable $Script:Audio8Python `
+        -BackendIds @("audio8-tts-preview-0.6b") `
+        -VariantIds @(
+            "audio8-tts-preview-0.6b-host-cpu",
+            "audio8-tts-preview-0.6b-host-cuda"
         )
     "llama-granite" = New-Profile `
         -Name "llama-granite" -Stage "llm" -Port 8081 `
@@ -800,6 +812,54 @@ function Get-LaunchSpec {
                     S2S_INFLECT_DEVICE = $device
                     PYTHONUNBUFFERED = "1"
                     PYTHONUTF8 = "1"
+                }
+            }
+        }
+        "audio8-python" {
+            $modelDir = Split-Path -Parent (Resolve-ModelPath "audio8-tts-preview-0.6b\model.safetensors")
+            foreach ($name in @(
+                "codec.pth",
+                "config.json",
+                "configuration_arktts.py",
+                "modeling_arktts.py",
+                "modeling_arktts_codec.py",
+                "processing_arktts.py",
+                "preprocessor_config.json",
+                "processor_config.json",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "special_tokens_map.json",
+                "generation_config.json"
+            )) {
+                Resolve-ModelPath "audio8-tts-preview-0.6b\$name" | Out-Null
+            }
+            $serverScript = [IO.Path]::GetFullPath(
+                (Join-Path $PSScriptRoot "tts_audio8_server.py")
+            )
+            if (-not (Test-Path -LiteralPath $serverScript -PathType Leaf)) {
+                throw "Audio8 server script is missing: $serverScript"
+            }
+            $device = if ([string]$Command.variant_id -like "*-cuda*") {
+                "cuda"
+            } else {
+                "cpu"
+            }
+            return [pscustomobject]@{
+                arguments = @(
+                    $serverScript,
+                    "--model-dir", $modelDir,
+                    "--device", $device,
+                    "--host", "127.0.0.1",
+                    "--port", "$($Profile.port)"
+                )
+                environment = @{
+                    S2S_AUDIO8_MODEL_DIR = $modelDir
+                    S2S_AUDIO8_DEVICE = $device
+                    HF_HUB_OFFLINE = "1"
+                    TRANSFORMERS_OFFLINE = "1"
+                    PYTHONUNBUFFERED = "1"
+                    PYTHONUTF8 = "1"
+                    TOKENIZERS_PARALLELISM = "false"
                 }
             }
         }

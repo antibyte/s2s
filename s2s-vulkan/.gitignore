@@ -7,6 +7,7 @@ models/supertonic/
 data/
 tools/CrispASR/
 tools/chatterbox/
+tools/audio8/
 tools/inflect/
 tools/xtts-v2/
 tools/llama.cpp/

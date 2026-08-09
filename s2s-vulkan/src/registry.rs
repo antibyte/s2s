@@ -984,6 +984,7 @@ pub fn is_known_host_profile(value: &str) -> bool {
             | "crispasr-omnivoice"
             | "chatterbox-python"
             | "inflect-python"
+            | "audio8-python"
             | "llama-granite"
             | "qwen-sycl"
             | "supertonic-webgpu"
@@ -1603,6 +1604,47 @@ mod tests {
             .presets
             .iter()
             .any(|p| p.id == "english-compact" && p.tts_id == "inflect-micro-v2"));
+    }
+
+    #[test]
+    fn audio8_tts_catalog_is_windows_host_experimental() {
+        let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let backend = catalog
+            .find("audio8-tts-preview-0.6b")
+            .expect("audio8-tts-preview-0.6b");
+        assert_eq!(backend.stage, BackendStage::Tts);
+        assert_eq!(backend.protocol, "openai-tts");
+        assert_eq!(backend.model, "Audio8/Audio8-TTS-Preview-0.6b");
+        assert_eq!(backend.native_sample_rate, 44_100);
+        assert_eq!(backend.voice_mode, VoiceMode::Request);
+        assert!(backend.languages.iter().any(|language| language == "de"));
+        assert!(backend.artifacts.iter().any(|artifact| {
+            artifact.path == "audio8-tts-preview-0.6b/model.safetensors"
+                && artifact.size == 1_202_342_528
+                && artifact
+                    .source
+                    .contains("/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/")
+        }));
+        assert!(is_known_host_profile("audio8-python"));
+
+        let mut windows = hw("any", &["cpu"]);
+        windows.platform = "windows".into();
+        windows.allow_experimental = true;
+        let cpu = resolve_variant(backend, &windows).expect("Windows CPU variant");
+        assert_eq!(cpu.id, "audio8-tts-preview-0.6b-host-cpu");
+        assert_eq!(cpu.host_profile, "audio8-python");
+        assert!(cpu.endpoint.contains("8096"));
+        assert!(!cpu.stable);
+
+        let mut nvidia = hw("nvidia", &["cuda", "cpu"]);
+        nvidia.platform = "windows".into();
+        nvidia.allow_experimental = true;
+        let cuda = resolve_variant(backend, &nvidia).expect("Windows CUDA variant");
+        assert_eq!(cuda.id, "audio8-tts-preview-0.6b-host-cuda");
+        assert_eq!(cuda.host_profile, "audio8-python");
+
+        let linux = hw("any", &["cpu"]);
+        assert!(resolve_variant(backend, &linux).is_none());
     }
 
     #[test]

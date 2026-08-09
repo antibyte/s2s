@@ -3003,6 +3003,156 @@
       ]
     },
     {
+      "id": "audio8-tts-preview-0.6b",
+      "stage": "tts",
+      "name": "Audio8 TTS Preview 0.6B",
+      "tag": "multilingual",
+      "description": "Audio8 TTS Preview 0.6B (DualAR): multilingual zero-shot TTS (de/en/zh/…) via Hugging Face Transformers trust_remote_code. Windows host Python sidecar on :8096. CUDA preferred; CPU is slow. Apache-2.0. Experimental.",
+      "protocol": "openai-tts",
+      "model": "Audio8/Audio8-TTS-Preview-0.6b",
+      "default_voice": "default",
+      "voices": [
+        "default"
+      ],
+      "voice_mode": "request",
+      "native_sample_rate": 44100,
+      "languages": [
+        "yue",
+        "zh",
+        "nl",
+        "en",
+        "fr",
+        "de",
+        "it",
+        "ja",
+        "ko",
+        "pl",
+        "es"
+      ],
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "resources": {
+        "vram_gb": 4.0,
+        "ram_gb": 8.0,
+        "stars": {
+          "cpu": 1,
+          "gpu": 4,
+          "vram": 3
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/model.safetensors?download=true",
+          "path": "audio8-tts-preview-0.6b/model.safetensors",
+          "size": 1202342528
+        },
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/codec.pth?download=true",
+          "path": "audio8-tts-preview-0.6b/codec.pth",
+          "size": 134985755
+        },
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/config.json?download=true",
+          "path": "audio8-tts-preview-0.6b/config.json",
+          "size": 1459
+        },
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/configuration_arktts.py?download=true",
+          "path": "audio8-tts-preview-0.6b/configuration_arktts.py",
+          "size": 4554
+        },
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/modeling_arktts.py?download=true",
+          "path": "audio8-tts-preview-0.6b/modeling_arktts.py",
+          "size": 34737
+        },
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/modeling_arktts_codec.py?download=true",
+          "path": "audio8-tts-preview-0.6b/modeling_arktts_codec.py",
+          "size": 19838
+        },
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/processing_arktts.py?download=true",
+          "path": "audio8-tts-preview-0.6b/processing_arktts.py",
+          "size": 11185
+        },
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/preprocessor_config.json?download=true",
+          "path": "audio8-tts-preview-0.6b/preprocessor_config.json",
+          "size": 254
+        },
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/processor_config.json?download=true",
+          "path": "audio8-tts-preview-0.6b/processor_config.json",
+          "size": 207
+        },
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/tokenizer.json?download=true",
+          "path": "audio8-tts-preview-0.6b/tokenizer.json",
+          "size": 12217872
+        },
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/tokenizer_config.json?download=true",
+          "path": "audio8-tts-preview-0.6b/tokenizer_config.json",
+          "size": 860832
+        },
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/special_tokens_map.json?download=true",
+          "path": "audio8-tts-preview-0.6b/special_tokens_map.json",
+          "size": 101864
+        },
+        {
+          "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/generation_config.json?download=true",
+          "path": "audio8-tts-preview-0.6b/generation_config.json",
+          "size": 190
+        }
+      ],
+      "variants": [
+        {
+          "id": "audio8-tts-preview-0.6b-host-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://host.docker.internal:8096/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8096/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {
+            "S2S_AUDIO8_DEVICE": "cuda"
+          },
+          "host_profile": "audio8-python"
+        },
+        {
+          "id": "audio8-tts-preview-0.6b-host-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "windows"
+          ],
+          "stable": false,
+          "endpoint": "http://host.docker.internal:8096/v1/audio/speech",
+          "native_endpoint": "http://127.0.0.1:8096/v1/audio/speech",
+          "container": "",
+          "image": "",
+          "health_path": "/health",
+          "environment": {
+            "S2S_AUDIO8_DEVICE": "cpu"
+          },
+          "host_profile": "audio8-python"
+        }
+      ]
+    },
+    {
       "id": "external-openai",
       "stage": "llm",
       "name": "External OpenAI-compatible LLM",
