@@ -20,6 +20,12 @@ class SegmentFilterTests(unittest.TestCase):
     def test_drops_combined_strong_silence_signal(self):
         self.assertTrue(MODULE.should_drop_segment(-1.1, 0.97))
 
+    def test_transcription_options_do_not_seed_transcript_text(self):
+        options = MODULE.transcription_options("de")
+        self.assertEqual(options["language"], "de")
+        self.assertTrue(options["vad_filter"])
+        self.assertNotIn("initial_prompt", options)
+
 
 if __name__ == "__main__":
     unittest.main()

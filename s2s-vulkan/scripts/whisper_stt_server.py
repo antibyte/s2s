@@ -24,6 +24,33 @@ def should_drop_segment(
     )
 
 
+def transcription_options(language: str | None) -> dict:
+    """Return quality-focused options without seeding transcript text.
+
+    A language-specific initial prompt can be emitted verbatim for low-signal
+    audio, turning silence into a convincing but false transcription.
+    """
+    return {
+        "language": language,
+        "task": "transcribe",
+        "beam_size": 5,
+        "best_of": 5,
+        "patience": 1.0,
+        "temperature": 0.0,
+        "vad_filter": True,
+        "vad_parameters": {
+            "min_silence_duration_ms": 400,
+            "speech_pad_ms": 200,
+            "threshold": 0.5,
+        },
+        "condition_on_previous_text": False,
+        "without_timestamps": True,
+        "compression_ratio_threshold": 2.4,
+        "log_prob_threshold": -1.0,
+        "no_speech_threshold": 0.6,
+    }
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--host", default="127.0.0.1")
@@ -124,26 +151,7 @@ def main():
                 model = state["model"]
                 segments, info = model.transcribe(
                     path,
-                    language=lang,
-                    task="transcribe",
-                    beam_size=5,
-                    best_of=5,
-                    patience=1.0,
-                    temperature=0.0,
-                    vad_filter=True,
-                    vad_parameters=dict(
-                        min_silence_duration_ms=400,
-                        speech_pad_ms=200,
-                        threshold=0.5,
-                    ),
-                    condition_on_previous_text=False,
-                    without_timestamps=True,
-                    initial_prompt=(
-                        "Das ist ein deutscher Gesprächsausschnitt." if lang == "de" else None
-                    ),
-                    compression_ratio_threshold=2.4,
-                    log_prob_threshold=-1.0,
-                    no_speech_threshold=0.6,
+                    **transcription_options(lang),
                 )
                 parts = []
                 for s in segments:
