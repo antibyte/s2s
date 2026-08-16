@@ -156,6 +156,14 @@ func TestInstallCreatesOnlyPolicyRuntime(t *testing.T) {
 	if tmpfs["/tmp"] != "rw,nosuid,nodev,size=268435456" {
 		t.Fatalf("module tmpfs = %#v", tmpfs)
 	}
+	capDrop := hostConfig["CapDrop"].([]any)
+	if len(capDrop) != 1 || capDrop[0] != "ALL" {
+		t.Fatalf("module cap drop = %#v", capDrop)
+	}
+	capAdd := hostConfig["CapAdd"].([]any)
+	if len(capAdd) != 2 || capAdd[0] != "SETUID" || capAdd[1] != "SETGID" {
+		t.Fatalf("module cap add = %#v", capAdd)
+	}
 }
 
 func TestRuntimePolicyRequiresDigestAndKnownStage(t *testing.T) {

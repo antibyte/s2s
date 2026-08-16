@@ -600,6 +600,7 @@ func (c *controller) ensureModule(ctx context.Context, runtime runtimePolicy) er
 		"Tmpfs":          map[string]string{"/tmp": "rw,nosuid,nodev,size=268435456"},
 		"ReadonlyRootfs": true,
 		"CapDrop":        []string{"ALL"},
+		"CapAdd":         []string{"SETUID", "SETGID"},
 		"SecurityOpt":    []string{"no-new-privileges:true"},
 	}
 	if runtime.ShmSizeBytes > 0 {
