@@ -34,7 +34,8 @@ RUN git -C /src/qwentts.cpp apply --check /tmp/0101-qwentts-rebased.patch \
     && git -C /src/qwentts.cpp/ggml apply /tmp/0102-ggml-rebased.patch
 
 WORKDIR /src/qwentts.cpp
-RUN . /opt/intel/oneapi/setvars.sh --force && \
+RUN export SETVARS_ARGS="--force" && \
+    . /opt/intel/oneapi/setvars.sh && \
     arch_arg="" && \
     if [ -n "${SYCL_DEVICE_ARCH}" ]; then arch_arg="-DGGML_SYCL_DEVICE_ARCH=${SYCL_DEVICE_ARCH}"; fi && \
     cmake -S . -B build -G Ninja \
