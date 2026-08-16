@@ -3,7 +3,7 @@
 set -euo pipefail
 
 MODEL="${VIBEVOICE_MODEL:-/models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf}"
-VOICE="${VIBEVOICE_VOICE:-/models/vibevoice/vibevoice-voice-emma.gguf}"
+VOICE="${VIBEVOICE_VOICE:-/models/vibevoice/emma.gguf}"
 VOICE_DIR="${VIBEVOICE_VOICE_DIR:-/models/vibevoice}"
 HOST="${VIBEVOICE_HOST:-0.0.0.0}"
 PORT="${VIBEVOICE_PORT:-8089}"
@@ -22,8 +22,9 @@ if [[ ! -f "$VOICE" ]]; then
   log "WARN: default voice missing at $VOICE — requests must pass voice="
 fi
 
-# CrispASR resolves voice="emma" as ${VOICE_DIR}/emma.gguf (or .wav). Lab
-# artifacts are named vibevoice-voice-<id>.gguf — publish stable short names.
+# Backward compatibility for model volumes created before the catalog stored
+# voices directly under their public IDs. New managed volumes already contain
+# ${VOICE_DIR}/<voice-id>.gguf and never need a runtime mutation.
 if [[ -d "$VOICE_DIR" ]]; then
   shopt -s nullglob
   for voice_file in "$VOICE_DIR"/vibevoice-voice-*.gguf; do

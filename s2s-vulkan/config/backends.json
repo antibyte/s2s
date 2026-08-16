@@ -1975,157 +1975,157 @@
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-emma.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-emma.gguf",
+          "path": "vibevoice/emma.gguf",
           "sha256": "4a2e1b0db22e9d1aec0b52b434c108743af629d9def1d7f2d986f55b9f6011e6",
           "size": 2740832
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-en-Emma_woman.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-en-Emma_woman.gguf",
+          "path": "vibevoice/en-Emma_woman.gguf",
           "sha256": "4a2e1b0db22e9d1aec0b52b434c108743af629d9def1d7f2d986f55b9f6011e6",
           "size": 2740832
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-en-Carter_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-en-Carter_man.gguf",
+          "path": "vibevoice/en-Carter_man.gguf",
           "sha256": "c6daf28153adeaafa318646f92d3d3eb6273030fe6670f4d1669287b494efb1b",
           "size": 3476064
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-en-Davis_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-en-Davis_man.gguf",
+          "path": "vibevoice/en-Davis_man.gguf",
           "sha256": "8368e08db8344c092e156f248ad9cabde24dde56d88c8aec7bbaff69edc5348c",
           "size": 2015840
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-en-Frank_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-en-Frank_man.gguf",
+          "path": "vibevoice/en-Frank_man.gguf",
           "sha256": "7d6656143cbde96841beeb87cda4a40135f2441b76a5aac01a868e9ca5185786",
           "size": 2757216
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-en-Grace_woman.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-en-Grace_woman.gguf",
+          "path": "vibevoice/en-Grace_woman.gguf",
           "sha256": "3d4be3904c7e76e5f150589ee7521e24974d2c4fd86079924ee9e6a31d0134f5",
           "size": 2275936
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-en-Mike_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-en-Mike_man.gguf",
+          "path": "vibevoice/en-Mike_man.gguf",
           "sha256": "5a4c39ed8e5af33a353b6939222e21e016c495eeafe2fafbfbe0260be76ccfd4",
           "size": 1634912
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-de-Spk0_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-de-Spk0_man.gguf",
+          "path": "vibevoice/de-Spk0_man.gguf",
           "sha256": "e3a8959895615f0c81affa0bef77829b55118930cd40cd21e096e439598ffe75",
           "size": 5698144
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-de-Spk1_woman.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-de-Spk1_woman.gguf",
+          "path": "vibevoice/de-Spk1_woman.gguf",
           "sha256": "3cd2e57098a98f47f49a34e4b894d564cd57b64b687ce153eb2137bd25dfbadf",
           "size": 4321888
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-fr-Spk0_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-fr-Spk0_man.gguf",
+          "path": "vibevoice/fr-Spk0_man.gguf",
           "sha256": "e0623b9bae015a158611a9e9b29917d656e12f33d5bf6bc8fc138101be7607ad",
           "size": 3568224
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-fr-Spk1_woman.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-fr-Spk1_woman.gguf",
+          "path": "vibevoice/fr-Spk1_woman.gguf",
           "sha256": "794fbbb36a0dd01097d0805c91fa301e3efade46750ff3b7d2be57bd581fbe80",
           "size": 3453536
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-in-Samuel_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-in-Samuel_man.gguf",
+          "path": "vibevoice/in-Samuel_man.gguf",
           "sha256": "8286c88a98e5a3b294e597c7a563a873674b288b763a9ac0d778ce6aaf638e0c",
           "size": 3101280
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-it-Spk0_woman.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-it-Spk0_woman.gguf",
+          "path": "vibevoice/it-Spk0_woman.gguf",
           "sha256": "4d6f91e829af1c25d3ee5f2178c9b6a099b3d874b7d9b0b63611b131fe6f0830",
           "size": 2081376
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-it-Spk1_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-it-Spk1_man.gguf",
+          "path": "vibevoice/it-Spk1_man.gguf",
           "sha256": "f23ce23af3720353814ceae50dda5826c1a8483c5d4311d8a710343e9aee9665",
           "size": 2323040
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-jp-Spk0_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-jp-Spk0_man.gguf",
+          "path": "vibevoice/jp-Spk0_man.gguf",
           "sha256": "27217e5f995ddb3757d2b9e87ddb7d17a5bf521f0b3fdd032d3a98637510f680",
           "size": 3787360
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-jp-Spk1_woman.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-jp-Spk1_woman.gguf",
+          "path": "vibevoice/jp-Spk1_woman.gguf",
           "sha256": "f3b0da1df5d83ed4246a97d34287dcff17cb85b62c485f189ca4e2143d5e30b0",
           "size": 3770976
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-kr-Spk0_woman.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-kr-Spk0_woman.gguf",
+          "path": "vibevoice/kr-Spk0_woman.gguf",
           "sha256": "8fb1190d9e1b1f42e4b72a638c8044eda2591ce1070ad7a414959ce8e6cc35f1",
           "size": 3367520
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-kr-Spk1_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-kr-Spk1_man.gguf",
+          "path": "vibevoice/kr-Spk1_man.gguf",
           "sha256": "41814dff4b1b5d724c770802771d037a5e6b6953b424703da0c5d6589fc6d59c",
           "size": 4731488
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-nl-Spk0_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-nl-Spk0_man.gguf",
+          "path": "vibevoice/nl-Spk0_man.gguf",
           "sha256": "d5edeae3bae0d1c19d60f0c40006cccc89f71ad63c7531521d54186319eb47a4",
           "size": 2986592
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-nl-Spk1_woman.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-nl-Spk1_woman.gguf",
+          "path": "vibevoice/nl-Spk1_woman.gguf",
           "sha256": "fca6e591d191d4c1aefad23d8ed3a34824c40ae9c019adb220d1630cece18769",
           "size": 4137568
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-pl-Spk0_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-pl-Spk0_man.gguf",
+          "path": "vibevoice/pl-Spk0_man.gguf",
           "sha256": "36a4595ca35694ab788d826777804ed3d03ffbef5a94b594f9485e86280f1b25",
           "size": 3041888
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-pl-Spk1_woman.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-pl-Spk1_woman.gguf",
+          "path": "vibevoice/pl-Spk1_woman.gguf",
           "sha256": "794d0abbf2b44a15f36f8a3d79be776b83a74e2b03e8ddb94cd976e6c07d249a",
           "size": 4059744
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-pt-Spk0_woman.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-pt-Spk0_woman.gguf",
+          "path": "vibevoice/pt-Spk0_woman.gguf",
           "sha256": "f58af0ef6495f15a9f7cb92c0f7e662b58cfdbf5f4b950cb906a11bc268fd729",
           "size": 1845856
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-pt-Spk1_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-pt-Spk1_man.gguf",
+          "path": "vibevoice/pt-Spk1_man.gguf",
           "sha256": "37130fd4059951849f89813b392867ea3f51958b808a86d7dc80161ebf8a219a",
           "size": 2880096
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-sp-Spk0_woman.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-sp-Spk0_woman.gguf",
+          "path": "vibevoice/sp-Spk0_woman.gguf",
           "sha256": "fed6bdd8c3e9707adcc2f2a1890544daede8bf67b2f9bf52aeacb91d6d482bee",
           "size": 3457632
         },
         {
           "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-voice-sp-Spk1_man.gguf?download=true",
-          "path": "vibevoice/vibevoice-voice-sp-Spk1_man.gguf",
+          "path": "vibevoice/sp-Spk1_man.gguf",
           "sha256": "35e151a874e27e197b6785615b797015b35f95f603c4cb8f6f86c5e76ed1bab4",
           "size": 4186720
         }
@@ -2149,7 +2149,7 @@
           "health_path": "/health",
           "environment": {
             "VIBEVOICE_MODEL": "/models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf",
-            "VIBEVOICE_VOICE": "/models/vibevoice/vibevoice-voice-emma.gguf",
+            "VIBEVOICE_VOICE": "/models/vibevoice/emma.gguf",
             "VIBEVOICE_VOICE_DIR": "/models/vibevoice",
             "VIBEVOICE_PORT": "8089"
           }
@@ -2172,7 +2172,7 @@
           "health_path": "/health",
           "environment": {
             "VIBEVOICE_MODEL": "/models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf",
-            "VIBEVOICE_VOICE": "/models/vibevoice/vibevoice-voice-emma.gguf",
+            "VIBEVOICE_VOICE": "/models/vibevoice/emma.gguf",
             "VIBEVOICE_VOICE_DIR": "/models/vibevoice",
             "VIBEVOICE_PORT": "8089"
           }
@@ -2225,7 +2225,7 @@
             },
             {
               "source": "https://huggingface.co/cstr/vibevoice-realtime-0.5b-GGUF/resolve/90b9839035fbe4c7e8289f8ce473cb6ffbf78b38/vibevoice-voice-emma.gguf?download=true",
-              "path": "vibevoice/vibevoice-voice-emma.gguf",
+              "path": "vibevoice/emma.gguf",
               "sha256": "4a2e1b0db22e9d1aec0b52b434c108743af629d9def1d7f2d986f55b9f6011e6",
               "size": 2740832
             }

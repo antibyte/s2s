@@ -1350,6 +1350,16 @@ mod tests {
             .artifacts
             .iter()
             .any(|a| a.path.contains("q4_k.gguf") && a.size > 600_000_000));
+        for voice in &backend.voices {
+            let path = format!("vibevoice/{voice}.gguf");
+            assert!(
+                backend
+                    .artifacts
+                    .iter()
+                    .any(|artifact| artifact.path == path),
+                "missing directly addressable artifact for voice {voice}"
+            );
+        }
         assert!(backend
             .variants
             .iter()

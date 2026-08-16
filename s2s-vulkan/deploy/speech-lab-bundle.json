@@ -1234,7 +1234,7 @@
       "command": [],
       "environment": {
         "VIBEVOICE_MODEL": "/models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf",
-        "VIBEVOICE_VOICE": "/models/vibevoice/vibevoice-voice-emma.gguf",
+        "VIBEVOICE_VOICE": "/models/vibevoice/emma.gguf",
         "VIBEVOICE_VOICE_DIR": "/models/vibevoice",
         "VIBEVOICE_PORT": "8089"
       },
@@ -1296,7 +1296,7 @@
       "command": [],
       "environment": {
         "VIBEVOICE_MODEL": "/models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf",
-        "VIBEVOICE_VOICE": "/models/vibevoice/vibevoice-voice-emma.gguf",
+        "VIBEVOICE_VOICE": "/models/vibevoice/emma.gguf",
         "VIBEVOICE_VOICE_DIR": "/models/vibevoice",
         "VIBEVOICE_PORT": "8089"
       },

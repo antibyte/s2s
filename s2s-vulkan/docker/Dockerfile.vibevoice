@@ -20,7 +20,7 @@ RUN chmod +x /app/vibevoice-entrypoint.sh \
         || echo "WARN: crispasr binary not verified at build; entrypoint probes at runtime")
 
 ENV VIBEVOICE_MODEL=/models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf \
-    VIBEVOICE_VOICE=/models/vibevoice/vibevoice-voice-emma.gguf \
+    VIBEVOICE_VOICE=/models/vibevoice/emma.gguf \
     VIBEVOICE_VOICE_DIR=/models/vibevoice \
     VIBEVOICE_HOST=0.0.0.0 \
     VIBEVOICE_PORT=8089 \
