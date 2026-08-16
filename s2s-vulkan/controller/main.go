@@ -597,7 +597,7 @@ func (c *controller) ensureModule(ctx context.Context, runtime runtimePolicy) er
 		"NetworkMode":    c.network,
 		"RestartPolicy":  map[string]any{"Name": "no"},
 		"Binds":          binds,
-		"Tmpfs":          map[string]string{"/tmp": "rw,nosuid,nodev,size=268435456"},
+		"Tmpfs":          map[string]string{"/tmp": "rw,nosuid,nodev,exec,size=268435456"},
 		"ReadonlyRootfs": true,
 		"CapDrop":        []string{"ALL"},
 		"CapAdd":         []string{"SETUID", "SETGID"},

@@ -679,6 +679,14 @@ fn validate_managed_target(
     Ok(())
 }
 
+fn provisioned_image<'a>(runtime: &'a RuntimeProvisionStatus, catalog_image: &'a str) -> &'a str {
+    if runtime.image.is_empty() {
+        catalog_image
+    } else {
+        &runtime.image
+    }
+}
+
 #[derive(Default)]
 struct IdleUnloadState {
     /// Bumped whenever a timer is cancelled or replaced.
@@ -2645,11 +2653,7 @@ impl LabController {
                     &variant.container,
                     stage,
                     &backend.id,
-                    if runtime.image.is_empty() {
-                        &variant.image
-                    } else {
-                        &runtime.image
-                    },
+                    provisioned_image(&runtime, &variant.image),
                 )
                 .await?;
         }
@@ -4070,12 +4074,13 @@ impl LabController {
             if !self.docker_control_enabled {
                 continue;
             }
+            let runtime = self.control.runtime_status(&active.variant_id).await?;
             self.control
                 .validate(
                     &active.container,
                     backend.stage,
                     &active.backend_id,
-                    &variant.image,
+                    provisioned_image(&runtime, &variant.image),
                 )
                 .await?;
             self.control
@@ -4200,12 +4205,13 @@ impl LabController {
                 if !using_fallback && failures >= 2 {
                     let activation = async {
                         if self.docker_control_enabled && !variant.container.is_empty() {
+                            let runtime = self.control.runtime_status(&variant.id).await?;
                             self.control
                                 .validate(
                                     &variant.container,
                                     BackendStage::Llm,
                                     &fallback.id,
-                                    &variant.image,
+                                    provisioned_image(&runtime, &variant.image),
                                 )
                                 .await?;
                             self.control.start(&variant.container).await?;
@@ -4921,6 +4927,22 @@ mod tests {
             "registry/asr:sha"
         )
         .is_err());
+    }
+
+    #[test]
+    fn provisioned_digest_overrides_catalog_tag_for_lifecycle_validation() {
+        let runtime = RuntimeProvisionStatus {
+            image: "registry/asr@sha256:immutable".into(),
+            ..RuntimeProvisionStatus::default()
+        };
+        assert_eq!(
+            provisioned_image(&runtime, "registry/asr:cpu"),
+            "registry/asr@sha256:immutable"
+        );
+        assert_eq!(
+            provisioned_image(&RuntimeProvisionStatus::default(), "registry/asr:cpu"),
+            "registry/asr:cpu"
+        );
     }
 
     #[tokio::test]

@@ -153,7 +153,7 @@ func TestInstallCreatesOnlyPolicyRuntime(t *testing.T) {
 	}
 	hostConfig := created["HostConfig"].(map[string]any)
 	tmpfs := hostConfig["Tmpfs"].(map[string]any)
-	if tmpfs["/tmp"] != "rw,nosuid,nodev,size=268435456" {
+	if tmpfs["/tmp"] != "rw,nosuid,nodev,exec,size=268435456" {
 		t.Fatalf("module tmpfs = %#v", tmpfs)
 	}
 	capDrop := hostConfig["CapDrop"].([]any)
