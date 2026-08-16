@@ -178,6 +178,13 @@ jobs:
             docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push \
               -t "ghcr.io/$owner/$repository:$TAG" -f "$dockerfile" "$@" s2s-vulkan
           }
+          build_without_sbom() {
+            repository="$1"; dockerfile="$2"; shift 2
+            # The upstream Higgs image contains enough Python metadata to exceed
+            # BuildKit's 40 MiB SBOM attestation limit. Keep provenance enabled.
+            docker buildx build --platform linux/amd64 --provenance=true --sbom=false --push \
+              -t "ghcr.io/$owner/$repository:$TAG" -f "$dockerfile" "$@" s2s-vulkan
+          }
           build s2s-speech-lab-controller s2s-vulkan/docker/Dockerfile.controller
           build s2s-whisper-fw s2s-vulkan/docker/Dockerfile.whisper
           build s2s-asr-parakeet-cpu s2s-vulkan/docker/Dockerfile.parakeet
@@ -195,7 +202,7 @@ jobs:
           build s2s-tts-vibevoice-cpu s2s-vulkan/docker/Dockerfile.vibevoice
           build s2s-tts-vibevoice-cuda s2s-vulkan/docker/Dockerfile.vibevoice \
             --build-arg CRISPASR_IMAGE=ghcr.io/crispstrobe/crispasr:main-cuda
-          build s2s-tts-higgs-cuda s2s-vulkan/docker/Dockerfile.higgs
+          build_without_sbom s2s-tts-higgs-cuda s2s-vulkan/docker/Dockerfile.higgs
           build s2s-llama-granite s2s-vulkan/docker/Dockerfile.llama
           build s2s-llama-granite-cuda s2s-vulkan/docker/Dockerfile.llama \
             --build-arg LLAMA_BASE_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
