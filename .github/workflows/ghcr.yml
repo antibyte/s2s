@@ -18,6 +18,15 @@ on:
       - "s2s-vulkan/**"
       - ".github/workflows/ghcr.yml"
   workflow_dispatch:
+    inputs:
+      target:
+        description: Image set to publish
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - controller
 
 env:
   REGISTRY: ghcr.io
@@ -26,7 +35,67 @@ env:
   BUNDLE_PATH: s2s-vulkan/deploy/speech-lab-bundle.json
 
 jobs:
+  publish-controller:
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'controller'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Test controller
+        run: |
+          cd s2s-vulkan/controller
+          go test ./...
+
+      - name: Image name (lowercase)
+        id: image
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "name=ghcr.io/$owner/s2s-speech-lab-controller" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push controller
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ env.CONTEXT }}
+          file: ${{ env.CONTEXT }}/docker/Dockerfile.controller
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.image.outputs.name }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=AuraGo Speech Lab Controller
+          provenance: true
+          sbom: true
+
+      - name: Summary
+        run: |
+          {
+            echo "## Speech Lab controller"
+            echo ""
+            echo "Image: \`${{ steps.image.outputs.name }}:sha-${{ github.sha }}\`"
+            echo ""
+            echo "Digest: \`${{ steps.build.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build-and-push:
+    if: github.event_name != 'workflow_dispatch' || inputs.target != 'controller'
     runs-on: ubuntu-latest
     permissions:
       contents: write
