@@ -151,6 +151,11 @@ func TestInstallCreatesOnlyPolicyRuntime(t *testing.T) {
 	if _, ok := created["Entrypoint"]; ok {
 		t.Fatal("caller-controlled entrypoint reached Docker create")
 	}
+	hostConfig := created["HostConfig"].(map[string]any)
+	tmpfs := hostConfig["Tmpfs"].(map[string]any)
+	if tmpfs["/tmp"] != "rw,nosuid,nodev,size=268435456" {
+		t.Fatalf("module tmpfs = %#v", tmpfs)
+	}
 }
 
 func TestRuntimePolicyRequiresDigestAndKnownStage(t *testing.T) {
@@ -176,9 +181,9 @@ func TestStartStopsRunningSiblingInSameStage(t *testing.T) {
 		calls = append(calls, r.Method+" "+r.URL.RequestURI())
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/containers/s2s-parakeet-cpu/json"):
-			_, _ = w.Write([]byte(`{"Id":"target","Name":"/s2s-parakeet-cpu","Config":{"Image":"ghcr.io/antibyte/s2s-asr-parakeet@sha256:` + strings.Repeat("a", 64) + `","Labels":{"aurago.managed":"speech-lab","aurago.role":"module","s2s.lab.managed":"true","backend-id":"parakeet-tdt-0.6b-v3","variant-id":"parakeet-cpu","stage":"asr","s2s.image":"ghcr.io/antibyte/s2s-asr-parakeet@sha256:` + strings.Repeat("a", 64) + `"}}}`))
+			_, _ = w.Write([]byte(`{"Id":"target","Name":"/s2s-parakeet-cpu","Config":{"Image":"ghcr.io/antibyte/s2s-asr-parakeet@sha256:` + strings.Repeat("a", 64) + `","Labels":{"aurago.managed":"speech-lab","aurago.role":"module","aurago.bundle":"test","aurago.fingerprint":"digest","s2s.lab.managed":"true","backend-id":"parakeet-tdt-0.6b-v3","variant-id":"parakeet-cpu","stage":"asr","s2s.image":"ghcr.io/antibyte/s2s-asr-parakeet@sha256:` + strings.Repeat("a", 64) + `"}}}`))
 		case strings.HasSuffix(r.URL.Path, "/containers/json"):
-			_, _ = w.Write([]byte(`[{"Id":"sibling","Names":["/s2s-whisper-cpu"],"Image":"ghcr.io/antibyte/s2s-asr-parakeet@sha256:` + strings.Repeat("a", 64) + `","Labels":{"aurago.managed":"speech-lab","aurago.role":"module","s2s.lab.managed":"true","backend-id":"parakeet-tdt-0.6b-v3","variant-id":"whisper-cpu","stage":"asr","s2s.image":"ghcr.io/antibyte/s2s-asr-parakeet@sha256:` + strings.Repeat("a", 64) + `"}}]`))
+			_, _ = w.Write([]byte(`[{"Id":"sibling","Names":["/s2s-whisper-cpu"],"Image":"ghcr.io/antibyte/s2s-asr-parakeet@sha256:` + strings.Repeat("a", 64) + `","Labels":{"aurago.managed":"speech-lab","aurago.role":"module","aurago.bundle":"test","aurago.fingerprint":"digest","s2s.lab.managed":"true","backend-id":"parakeet-tdt-0.6b-v3","variant-id":"whisper-cpu","stage":"asr","s2s.image":"ghcr.io/antibyte/s2s-asr-parakeet@sha256:` + strings.Repeat("a", 64) + `"}}]`))
 		case strings.HasSuffix(r.URL.Path, "/containers/s2s-whisper-cpu/stop"):
 			w.WriteHeader(http.StatusNoContent)
 		case strings.HasSuffix(r.URL.Path, "/containers/s2s-parakeet-cpu/start"):

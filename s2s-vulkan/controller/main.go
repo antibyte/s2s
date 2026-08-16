@@ -597,6 +597,7 @@ func (c *controller) ensureModule(ctx context.Context, runtime runtimePolicy) er
 		"NetworkMode":    c.network,
 		"RestartPolicy":  map[string]any{"Name": "no"},
 		"Binds":          binds,
+		"Tmpfs":          map[string]string{"/tmp": "rw,nosuid,nodev,size=268435456"},
 		"ReadonlyRootfs": true,
 		"CapDrop":        []string{"ALL"},
 		"SecurityOpt":    []string{"no-new-privileges:true"},
@@ -667,6 +668,8 @@ func (c *controller) owned(inspected dockerInspect) bool {
 func (c *controller) matches(inspected dockerInspect, runtime runtimePolicy) bool {
 	labels := inspected.Config.Labels
 	return c.owned(inspected) &&
+		labels["aurago.bundle"] == c.policy.BundleVersion &&
+		labels["aurago.fingerprint"] == c.bundleDigest &&
 		labels["stage"] == runtime.Stage &&
 		labels["backend-id"] == runtime.BackendID &&
 		labels["variant-id"] == runtime.VariantID &&
@@ -689,6 +692,8 @@ func (c *controller) matchesListed(name, image string, labels map[string]any) bo
 		if labelString(labels, "aurago.managed") == ownerLabel &&
 			labelString(labels, "s2s.lab.managed") == "true" &&
 			labelString(labels, "aurago.role") == "module" &&
+			labelString(labels, "aurago.bundle") == c.policy.BundleVersion &&
+			labelString(labels, "aurago.fingerprint") == c.bundleDigest &&
 			labelString(labels, "stage") == runtime.Stage &&
 			labelString(labels, "backend-id") == runtime.BackendID &&
 			labelString(labels, "variant-id") == runtime.VariantID &&
