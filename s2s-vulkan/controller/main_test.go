@@ -47,6 +47,20 @@ func TestWaitForExistingTokenHandlesInitRace(t *testing.T) {
 	}
 }
 
+func TestLoadOrCreateTokenPublishesReadOnlySharedFile(t *testing.T) {
+	path := t.TempDir() + "/token"
+	if _, err := loadOrCreateToken(path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o444 {
+		t.Fatalf("token mode = %o, want 444", got)
+	}
+}
+
 func TestControllerRejectsUnauthenticatedAndUnknownTargets(t *testing.T) {
 	c := testController(t, http.NotFoundHandler())
 	server := httptest.NewServer(c.routes())

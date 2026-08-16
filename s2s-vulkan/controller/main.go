@@ -237,6 +237,9 @@ func loadOrCreateToken(path string) (string, error) {
 	}
 	if data, err := os.ReadFile(path); err == nil {
 		if token := strings.TrimSpace(string(data)); len(token) >= 32 {
+			if err := os.Chmod(path, 0o444); err != nil {
+				return "", fmt.Errorf("make controller token read-only: %w", err)
+			}
 			return token, nil
 		}
 	}
@@ -254,6 +257,9 @@ func loadOrCreateToken(path string) (string, error) {
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return "", fmt.Errorf("publish controller token: %w", err)
+	}
+	if err := os.Chmod(path, 0o444); err != nil {
+		return "", fmt.Errorf("make controller token read-only: %w", err)
 	}
 	return token, nil
 }
