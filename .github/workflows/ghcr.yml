@@ -187,7 +187,7 @@ jobs:
           build s2s-asr-voxtral-cuda s2s-vulkan/docker/Dockerfile.voxtral \
             --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
           build s2s-tts-qwen-sycl-aot s2s-vulkan/docker/Dockerfile.tts-sycl \
-            --build-arg SYCL_DEVICE_ARCH=intel_gpu_bmg_g21
+            --build-arg SYCL_DEVICE_ARCH=bmg_g21
           build s2s-tts-qwen-sycl-jit s2s-vulkan/docker/Dockerfile.tts-sycl
           build s2s-tts-qwen-vulkan s2s-vulkan/docker/Dockerfile.tts
           build s2s-tts-qwen-cuda s2s-vulkan/docker/Dockerfile.tts
