@@ -831,13 +831,16 @@ fn variant_matches(variant: &BackendVariant, hw: &HardwareProfile) -> bool {
 
 pub fn variant_rank(variant: &BackendVariant, hw: &HardwareProfile) -> u8 {
     // Certified Vulkan first. NVIDIA then prefers CUDA, Intel uses SYCL for
-    // explicit model variants such as Qwen, and CPU remains the last fallback.
+    // explicit model variants such as Qwen. A published local CPU runtime is
+    // preferred over a remote endpoint so an unconfigured remote variant can
+    // never hide an installable local module. Remote-only backends still
+    // resolve normally and are gated by their credential and health checks.
     match variant.accelerator.as_str() {
         "vulkan" => 0,
         "cuda" if hw.vendor == "nvidia" => 1,
         "sycl" if hw.vendor == "intel" => 2,
-        "remote" => 3,
-        "cpu" => 4,
+        "cpu" => 3,
+        "remote" => 4,
         _ => 5,
     }
 }
@@ -1351,10 +1354,10 @@ mod tests {
             .variants
             .iter()
             .any(|v| v.id == "vibevoice-realtime-0.5b-cpu" && v.accelerator == "cpu"));
-        // remote host ranks above cpu when both are stable.
+        // A stable local runtime must not be hidden by an unconfigured remote.
         let selected = resolve_variant(backend, &hw("intel", &["sycl", "cpu"])).unwrap();
-        assert_eq!(selected.id, "vibevoice-realtime-0.5b-host");
-        assert!(selected.endpoint.contains("8089"));
+        assert_eq!(selected.id, "vibevoice-realtime-0.5b-cpu");
+        assert!(!selected.container.is_empty());
     }
 
     #[test]
