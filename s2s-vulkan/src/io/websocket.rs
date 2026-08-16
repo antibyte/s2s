@@ -5,7 +5,7 @@ use crate::benchmark::{BenchmarkRating, BenchmarkRequest, BenchmarkService};
 use crate::config::Config;
 use crate::gateway::{GatewaySpeechRequest, GatewayVoiceNotActive};
 use crate::gpu::GpuReport;
-use crate::lab::{ActivateStackRequest, LabController};
+use crate::lab::{ActivateStackRequest, LabController, ModuleInstallRequest};
 use crate::messages::{Control, PipelineEvent, QueueItem};
 use crate::pipeline::{spawn_pipeline_shared, PipelineHandles};
 use crate::registry::{BackendCatalog, HardwareProfile};
@@ -74,6 +74,16 @@ pub async fn run_websocket_server(cfg: Config, gpu_report: GpuReport) -> Result<
         .route(
             "/api/v1/models/{backend_id}",
             axum::routing::delete(delete_model),
+        )
+        .route(
+            "/api/v1/modules/{backend_id}/install",
+            post(post_module_install)
+                .get(get_module)
+                .delete(delete_module_install),
+        )
+        .route(
+            "/api/v1/modules/{backend_id}",
+            get(get_module).delete(delete_module),
         )
         .route("/api/v1/benchmarks", post(post_benchmark))
         .route("/api/v1/benchmarks/{id}", get(get_benchmark))
@@ -555,6 +565,73 @@ async fn delete_model(State(state): State<AppState>, Path(backend_id): Path<Stri
             Json(serde_json::json!({ "error": format!("{error:#}") })),
         )
             .into_response(),
+    }
+}
+
+async fn post_module_install(
+    State(state): State<AppState>,
+    Path(backend_id): Path<String>,
+    Json(request): Json<ModuleInstallRequest>,
+) -> Response {
+    match state.lab.start_module_install(&backend_id, request).await {
+        Ok(result) => (StatusCode::ACCEPTED, Json(result)).into_response(),
+        Err(error) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "code": module_error_code(&error),
+                "error": format!("{error:#}")
+            })),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_module(State(state): State<AppState>, Path(backend_id): Path<String>) -> Response {
+    match state.lab.module_status(&backend_id).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": format!("{error:#}") })),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_module_install(
+    State(state): State<AppState>,
+    Path(backend_id): Path<String>,
+) -> Response {
+    match state.lab.cancel_module_install(&backend_id).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": format!("{error:#}") })),
+        )
+            .into_response(),
+    }
+}
+
+async fn delete_module(State(state): State<AppState>, Path(backend_id): Path<String>) -> Response {
+    match state.lab.delete_module(&backend_id).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": format!("{error:#}") })),
+        )
+            .into_response(),
+    }
+}
+
+fn module_error_code(error: &anyhow::Error) -> &'static str {
+    let message = error.to_string();
+    if message.contains("model_not_installed") {
+        "model_not_installed"
+    } else if message.contains("host_module_delivery_pending") {
+        "host_module_delivery_pending"
+    } else if message.contains("catalog revision changed") {
+        "catalog_revision_changed"
+    } else {
+        "module_install_failed"
     }
 }
 

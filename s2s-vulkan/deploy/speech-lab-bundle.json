@@ -1,39 +1,1468 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "bundle_version": "0.1.0",
-  "contract_version": "speech-lab/v1",
+  "contract_version": "speech-lab/v2",
   "publisher": "ghcr.io/antibyte",
   "images": {
-    "gateway": "ghcr.io/antibyte/s2s-vulkan@sha256:RELEASE_DIGEST_GATEWAY",
-    "asr": "ghcr.io/antibyte/s2s-whisper-fw@sha256:RELEASE_DIGEST_ASR",
-    "tts": "ghcr.io/antibyte/s2s-vulkan@sha256:RELEASE_DIGEST_TTS",
-    "llm": "ghcr.io/antibyte/s2s-llama-granite@sha256:RELEASE_DIGEST_LLM",
-    "web": "ghcr.io/antibyte/s2s-web@sha256:RELEASE_DIGEST_WEB",
-    "model_init": "ghcr.io/antibyte/s2s-model-init@sha256:RELEASE_DIGEST_INIT"
+    "gateway": "ghcr.io/antibyte/s2s-vulkan@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "controller": "ghcr.io/antibyte/s2s-speech-lab-controller@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "whisper": "ghcr.io/antibyte/s2s-whisper-fw@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "parakeet_cpu": "ghcr.io/antibyte/s2s-asr-parakeet-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "parakeet_cuda": "ghcr.io/antibyte/s2s-asr-parakeet-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "voxtral_cpu": "ghcr.io/antibyte/s2s-asr-voxtral-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "voxtral_cuda": "ghcr.io/antibyte/s2s-asr-voxtral-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "qwen_sycl_aot": "ghcr.io/antibyte/s2s-tts-qwen-sycl-aot@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "qwen_sycl_jit": "ghcr.io/antibyte/s2s-tts-qwen-sycl-jit@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "qwen_vulkan": "ghcr.io/antibyte/s2s-tts-qwen-vulkan@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "qwen_cuda": "ghcr.io/antibyte/s2s-tts-qwen-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "kokoro": "ghcr.io/antibyte/s2s-tts-kokoro@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "vibevoice_cpu": "ghcr.io/antibyte/s2s-tts-vibevoice-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "vibevoice_cuda": "ghcr.io/antibyte/s2s-tts-vibevoice-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "higgs_cuda": "ghcr.io/antibyte/s2s-tts-higgs-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "llama_cpu": "ghcr.io/antibyte/s2s-llama-granite@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "llama_cuda": "ghcr.io/antibyte/s2s-llama-granite-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "web": "ghcr.io/antibyte/s2s-web@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "model_init": "ghcr.io/antibyte/s2s-model-init@sha256:0000000000000000000000000000000000000000000000000000000000000000"
   },
   "network": "aurago-speech-lab",
   "ports": {
     "gateway": 8765,
     "web": 8766
   },
-  "volumes": ["aurago-speech-lab-models", "aurago-speech-lab-data"],
-  "start_order": ["model_init", "asr", "llm", "tts", "gateway", "web"],
+  "volumes": [
+    "aurago-speech-lab-models",
+    "aurago-speech-lab-data",
+    "aurago-speech-lab-control"
+  ],
+  "start_order": [
+    "model_init",
+    "control_init",
+    "asr",
+    "llm",
+    "tts",
+    "controller",
+    "gateway",
+    "web"
+  ],
   "services": [
-    {"role": "model_init", "image": "model_init", "restart": "no"},
-    {"role": "asr", "image": "asr", "health_path": "/health", "port": 8082},
-    {"role": "llm", "image": "llm", "health_path": "/health", "port": 8081,
-      "command": ["-m", "/opt/s2s-models/granite-3.3-2b-instruct-q4_k_m.gguf", "--host", "0.0.0.0", "--port", "8081", "-c", "2048", "--alias", "granite-3.3-2b-instruct"]},
-    {"role": "tts", "image": "tts", "health_path": "/health", "port": 8083,
-      "command": ["--mode", "tts-server", "--host", "0.0.0.0", "--port", "8083", "--skip-health", "--supertonic-model-dir", "/opt/s2s-models/supertonic/onnx", "--supertonic-voice", "M1", "--tts-sample-rate", "16000"]},
-    {"role": "gateway", "image": "gateway", "health_path": "/health", "port": 8765,
-      "command": ["--mode", "lab", "--host", "0.0.0.0", "--port", "8765", "--tts", "http", "--tts-url", "http://supertonic:8083/v1/audio/speech", "--llm-base-url", "http://llama-fallback:8081/v1", "--whisper-url", "http://whisper-tiny:8082"]},
-    {"role": "web", "image": "web", "health_path": "/", "port": 80}
+    {
+      "role": "model_init",
+      "image": "model_init",
+      "restart": "no"
+    },
+    {
+      "role": "asr",
+      "image": "asr",
+      "health_path": "/health",
+      "port": 8082
+    },
+    {
+      "role": "llm",
+      "image": "llm",
+      "health_path": "/health",
+      "port": 8081,
+      "command": [
+        "-m",
+        "/opt/s2s-models/granite-3.3-2b-instruct-q4_k_m.gguf",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8081",
+        "-c",
+        "2048",
+        "--alias",
+        "granite-3.3-2b-instruct"
+      ]
+    },
+    {
+      "role": "tts",
+      "image": "tts",
+      "health_path": "/health",
+      "port": 8083,
+      "command": [
+        "--mode",
+        "tts-server",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8083",
+        "--skip-health",
+        "--supertonic-model-dir",
+        "/opt/s2s-models/supertonic/onnx",
+        "--supertonic-voice",
+        "M1",
+        "--tts-sample-rate",
+        "16000"
+      ]
+    },
+    {
+      "role": "controller",
+      "image": "controller",
+      "health_path": "/health",
+      "port": 2375,
+      "internal_only": true,
+      "docker_socket": true
+    },
+    {
+      "role": "control_init",
+      "image": "controller",
+      "restart": "no",
+      "internal_only": true,
+      "environment": [
+        "S2S_CONTROLLER_INIT_TOKEN_ONLY=true",
+        "S2S_CONTROLLER_TOKEN_FILE=/control/token"
+      ]
+    },
+    {
+      "role": "gateway",
+      "image": "gateway",
+      "health_path": "/health",
+      "port": 8765,
+      "command": [
+        "--mode",
+        "lab",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8765",
+        "--tts",
+        "http",
+        "--tts-url",
+        "http://supertonic:8083/v1/audio/speech",
+        "--llm-base-url",
+        "http://llama-fallback:8081/v1",
+        "--whisper-url",
+        "http://whisper-tiny:8082"
+      ]
+    },
+    {
+      "role": "web",
+      "image": "web",
+      "health_path": "/",
+      "port": 80
+    }
   ],
   "stable_backends": {
-    "asr": ["faster-whisper-tiny"],
-    "tts": ["supertonic"],
-    "llm": ["granite-3.3-2b-instruct"]
+    "asr": [
+      "faster-whisper-tiny"
+    ],
+    "tts": [
+      "supertonic"
+    ],
+    "llm": [
+      "granite-3.3-2b-instruct"
+    ]
   },
-  "hardware": {"gpu_optional": true, "minimum_memory_mb": 4096},
-  "models": {"download_on_start": false, "optional_downloads_require_ui_approval": true}
+  "hardware": {
+    "gpu_optional": true,
+    "minimum_memory_mb": 4096
+  },
+  "models": {
+    "download_on_start": false,
+    "optional_downloads_require_ui_approval": true
+  },
+  "runtimes": [
+    {
+      "backend_id": "fw-base",
+      "variant_id": "fw-base-cpu",
+      "stage": "asr",
+      "container": "s2s-whisper-base",
+      "image": "ghcr.io/antibyte/s2s-whisper-fw@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "whisper",
+      "image_download_size_bytes": 2400000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cpu",
+      "experimental": false,
+      "command": [],
+      "environment": {
+        "S2S_WHISPER_MODEL": "/models/faster-whisper/base",
+        "S2S_WHISPER_DEVICE": "cpu"
+      },
+      "aliases": [
+        "whisper-base"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 1610612736,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 0,
+        "vram_gb": 0.5
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "fw-base",
+      "variant_id": "fw-base-cuda",
+      "stage": "asr",
+      "container": "s2s-whisper-base",
+      "image": "ghcr.io/antibyte/s2s-whisper-fw@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "whisper",
+      "image_download_size_bytes": 2400000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cuda",
+      "experimental": false,
+      "command": [],
+      "environment": {
+        "S2S_WHISPER_MODEL": "/models/faster-whisper/base",
+        "S2S_WHISPER_DEVICE": "cuda"
+      },
+      "aliases": [
+        "whisper-base"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 1610612736,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 1,
+        "vram_gb": 0.5
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "fw-small",
+      "variant_id": "fw-small-cpu",
+      "stage": "asr",
+      "container": "s2s-whisper-small",
+      "image": "ghcr.io/antibyte/s2s-whisper-fw@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "whisper",
+      "image_download_size_bytes": 2400000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cpu",
+      "experimental": false,
+      "command": [],
+      "environment": {
+        "S2S_WHISPER_MODEL": "/models/faster-whisper/small",
+        "S2S_WHISPER_DEVICE": "cpu"
+      },
+      "aliases": [
+        "whisper-small"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 2147483648,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 0,
+        "vram_gb": 0.8
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "fw-small",
+      "variant_id": "fw-small-cuda",
+      "stage": "asr",
+      "container": "s2s-whisper-small",
+      "image": "ghcr.io/antibyte/s2s-whisper-fw@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "whisper",
+      "image_download_size_bytes": 2400000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cuda",
+      "experimental": false,
+      "command": [],
+      "environment": {
+        "S2S_WHISPER_MODEL": "/models/faster-whisper/small",
+        "S2S_WHISPER_DEVICE": "cuda"
+      },
+      "aliases": [
+        "whisper-small"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 2147483648,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 1,
+        "vram_gb": 0.8
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "fw-tiny",
+      "variant_id": "fw-tiny-cpu",
+      "stage": "asr",
+      "container": "s2s-whisper-tiny",
+      "image": "ghcr.io/antibyte/s2s-whisper-fw@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "whisper",
+      "image_download_size_bytes": 2400000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cpu",
+      "experimental": false,
+      "command": [],
+      "environment": {
+        "S2S_WHISPER_MODEL": "/opt/s2s-models/faster-whisper-tiny",
+        "S2S_WHISPER_DEVICE": "cpu"
+      },
+      "aliases": [
+        "whisper-tiny"
+      ],
+      "model_mounts": [
+        "/models",
+        "/opt/s2s-models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models",
+            "/opt/s2s-models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 1073741824,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 0,
+        "vram_gb": 0.25
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "fw-tiny",
+      "variant_id": "fw-tiny-cuda",
+      "stage": "asr",
+      "container": "s2s-whisper-tiny",
+      "image": "ghcr.io/antibyte/s2s-whisper-fw@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "whisper",
+      "image_download_size_bytes": 2400000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cuda",
+      "experimental": false,
+      "command": [],
+      "environment": {
+        "S2S_WHISPER_MODEL": "/opt/s2s-models/faster-whisper-tiny",
+        "S2S_WHISPER_DEVICE": "cuda"
+      },
+      "aliases": [
+        "whisper-tiny"
+      ],
+      "model_mounts": [
+        "/models",
+        "/opt/s2s-models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models",
+            "/opt/s2s-models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 1073741824,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 1,
+        "vram_gb": 0.25
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "higgs-tts-3-4b",
+      "variant_id": "higgs-tts-3-4b-cuda",
+      "stage": "tts",
+      "container": "s2s-tts-higgs",
+      "image": "ghcr.io/antibyte/s2s-tts-higgs-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "higgs_cuda",
+      "image_download_size_bytes": 9500000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cuda",
+      "experimental": true,
+      "command": [],
+      "environment": {
+        "HIGGS_MODEL_PATH": "/models/higgs-tts-3-4b",
+        "HIGGS_PORT": "8086"
+      },
+      "aliases": [
+        "tts-higgs"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/v1/models",
+        "port": 8086,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 17179869184,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 1073741824,
+        "gpu_count": 1,
+        "vram_gb": 24.0
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "kokoro",
+      "variant_id": "kokoro-cpu",
+      "stage": "tts",
+      "container": "s2s-tts-kokoro",
+      "image": "ghcr.io/antibyte/s2s-tts-kokoro@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "kokoro",
+      "image_download_size_bytes": 650000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cpu",
+      "experimental": false,
+      "command": [],
+      "environment": {},
+      "aliases": [
+        "tts-kokoro"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8084,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 1610612736,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 0,
+        "vram_gb": 0.0
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "local-fallback",
+      "variant_id": "local-fallback-cpu",
+      "stage": "llm",
+      "container": "s2s-llama-fallback",
+      "image": "ghcr.io/antibyte/s2s-llama-granite@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "llama_cpu",
+      "image_download_size_bytes": 2200000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cpu",
+      "experimental": false,
+      "command": [
+        "-m",
+        "/opt/s2s-models/granite-3.3-2b-instruct-q4_k_m.gguf",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8081",
+        "-c",
+        "2048",
+        "--alias",
+        "granite-3.3-2b-instruct"
+      ],
+      "environment": {
+        "GGML_BACKEND": "CPU"
+      },
+      "aliases": [
+        "llama-fallback"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/v1/models",
+        "port": 8081,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 2684354560,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 0,
+        "vram_gb": 2.0
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "local-fallback",
+      "variant_id": "local-fallback-cuda",
+      "stage": "llm",
+      "container": "s2s-llama-fallback",
+      "image": "ghcr.io/antibyte/s2s-llama-granite-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "llama_cuda",
+      "image_download_size_bytes": 4500000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cuda",
+      "experimental": false,
+      "command": [
+        "-m",
+        "/opt/s2s-models/granite-3.3-2b-instruct-q4_k_m.gguf",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8081",
+        "-c",
+        "2048",
+        "--alias",
+        "granite-3.3-2b-instruct"
+      ],
+      "environment": {
+        "GGML_BACKEND": "CUDA0"
+      },
+      "aliases": [
+        "llama-fallback"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/v1/models",
+        "port": 8081,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 2684354560,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 1,
+        "vram_gb": 2.0
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "parakeet-tdt-0.6b-v3",
+      "variant_id": "parakeet-tdt-0.6b-v3-cpu",
+      "stage": "asr",
+      "container": "s2s-parakeet-cpu",
+      "image": "ghcr.io/antibyte/s2s-asr-parakeet-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "parakeet_cpu",
+      "image_download_size_bytes": 2800000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cpu",
+      "experimental": false,
+      "command": [],
+      "environment": {
+        "PARAKEET_MODEL_DIR": "/models/parakeet-tdt-0.6b-v3",
+        "PARAKEET_DEVICE": "cpu",
+        "PARAKEET_DTYPE": "float32"
+      },
+      "aliases": [
+        "parakeet-cpu"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 5368709120,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 1073741824,
+        "gpu_count": 0,
+        "vram_gb": 3.5
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "parakeet-tdt-0.6b-v3",
+      "variant_id": "parakeet-tdt-0.6b-v3-cuda",
+      "stage": "asr",
+      "container": "s2s-parakeet-cuda",
+      "image": "ghcr.io/antibyte/s2s-asr-parakeet-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "parakeet_cuda",
+      "image_download_size_bytes": 7500000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cuda",
+      "experimental": false,
+      "command": [],
+      "environment": {
+        "PARAKEET_MODEL_DIR": "/models/parakeet-tdt-0.6b-v3",
+        "PARAKEET_DEVICE": "cuda",
+        "PARAKEET_DTYPE": "float16"
+      },
+      "aliases": [
+        "parakeet-cuda"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 5368709120,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 1073741824,
+        "gpu_count": 1,
+        "vram_gb": 3.5
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "qwen3-tts-0.6b",
+      "variant_id": "qwen3-tts-b580-sycl-aot",
+      "stage": "tts",
+      "container": "s2s-tts-qwen-sycl-aot",
+      "image": "ghcr.io/antibyte/s2s-tts-qwen-sycl-aot@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "qwen_sycl_aot",
+      "image_download_size_bytes": 3800000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "sycl",
+      "experimental": false,
+      "command": [],
+      "environment": {
+        "GGML_BACKEND": "SYCL0",
+        "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu",
+        "QWEN_CODE_SAMPLER": "host"
+      },
+      "aliases": [
+        "tts-qwen-sycl-aot"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8083,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 2147483648,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 1,
+        "vram_gb": 1.5
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "qwen3-tts-0.6b",
+      "variant_id": "qwen3-tts-cuda",
+      "stage": "tts",
+      "container": "s2s-tts-qwen-cuda",
+      "image": "ghcr.io/antibyte/s2s-tts-qwen-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "qwen_cuda",
+      "image_download_size_bytes": 3600000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cuda",
+      "experimental": true,
+      "command": [],
+      "environment": {
+        "GGML_BACKEND": "CUDA0",
+        "QWEN_CODE_SAMPLER": "host"
+      },
+      "aliases": [
+        "tts-qwen-cuda"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8083,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 2147483648,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 1,
+        "vram_gb": 1.5
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "qwen3-tts-0.6b",
+      "variant_id": "qwen3-tts-sycl-jit",
+      "stage": "tts",
+      "container": "s2s-tts-qwen-sycl-jit",
+      "image": "ghcr.io/antibyte/s2s-tts-qwen-sycl-jit@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "qwen_sycl_jit",
+      "image_download_size_bytes": 3800000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "sycl",
+      "experimental": false,
+      "command": [],
+      "environment": {
+        "GGML_BACKEND": "SYCL0",
+        "ONEAPI_DEVICE_SELECTOR": "level_zero:gpu",
+        "QWEN_CODE_SAMPLER": "host"
+      },
+      "aliases": [
+        "tts-qwen-sycl-jit"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8083,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 2147483648,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 1,
+        "vram_gb": 1.5
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "qwen3-tts-0.6b",
+      "variant_id": "qwen3-tts-vulkan",
+      "stage": "tts",
+      "container": "s2s-tts-qwen-vulkan",
+      "image": "ghcr.io/antibyte/s2s-tts-qwen-vulkan@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "qwen_vulkan",
+      "image_download_size_bytes": 1800000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "vulkan",
+      "experimental": true,
+      "command": [],
+      "environment": {
+        "GGML_BACKEND": "Vulkan0",
+        "QWEN_CODE_SAMPLER": "host"
+      },
+      "aliases": [
+        "tts-qwen-vulkan"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8083,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 2147483648,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 1,
+        "vram_gb": 1.5
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "supertonic",
+      "variant_id": "supertonic-cpu",
+      "stage": "tts",
+      "container": "s2s-supertonic",
+      "image": "ghcr.io/antibyte/s2s-vulkan@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "gateway",
+      "image_download_size_bytes": 320000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cpu",
+      "experimental": false,
+      "command": [
+        "--mode",
+        "tts-server",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8083",
+        "--skip-health",
+        "--supertonic-model-dir",
+        "/opt/s2s-models/supertonic/onnx",
+        "--supertonic-voice",
+        "M1",
+        "--tts-sample-rate",
+        "16000"
+      ],
+      "environment": {},
+      "aliases": [
+        "supertonic"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8083,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 2147483648,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 0,
+        "vram_gb": 0.0
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "vibevoice-realtime-0.5b",
+      "variant_id": "vibevoice-realtime-0.5b-cpu",
+      "stage": "tts",
+      "container": "s2s-tts-vibevoice",
+      "image": "ghcr.io/antibyte/s2s-tts-vibevoice-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "vibevoice_cpu",
+      "image_download_size_bytes": 1200000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cpu",
+      "experimental": false,
+      "command": [],
+      "environment": {
+        "VIBEVOICE_MODEL": "/models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf",
+        "VIBEVOICE_VOICE": "/models/vibevoice/vibevoice-voice-emma.gguf",
+        "VIBEVOICE_VOICE_DIR": "/models/vibevoice",
+        "VIBEVOICE_PORT": "8089"
+      },
+      "aliases": [
+        "tts-vibevoice"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8089,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 2147483648,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 0,
+        "vram_gb": 1.0
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "vibevoice-realtime-0.5b",
+      "variant_id": "vibevoice-realtime-0.5b-cuda",
+      "stage": "tts",
+      "container": "s2s-tts-vibevoice-cuda",
+      "image": "ghcr.io/antibyte/s2s-tts-vibevoice-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "vibevoice_cuda",
+      "image_download_size_bytes": 3600000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cuda",
+      "experimental": true,
+      "command": [],
+      "environment": {
+        "VIBEVOICE_MODEL": "/models/vibevoice/vibevoice-realtime-0.5b-q4_k.gguf",
+        "VIBEVOICE_VOICE": "/models/vibevoice/vibevoice-voice-emma.gguf",
+        "VIBEVOICE_VOICE_DIR": "/models/vibevoice",
+        "VIBEVOICE_PORT": "8089"
+      },
+      "aliases": [
+        "tts-vibevoice-cuda"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8089,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 2147483648,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 1,
+        "vram_gb": 1.0
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "voxtral-mini-4b-realtime",
+      "variant_id": "voxtral-mini-4b-realtime-cpu",
+      "stage": "asr",
+      "container": "s2s-voxtral-cpu",
+      "image": "ghcr.io/antibyte/s2s-asr-voxtral-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "voxtral_cpu",
+      "image_download_size_bytes": 3200000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cpu",
+      "experimental": true,
+      "command": [],
+      "environment": {
+        "VOXTRAL_MODEL_DIR": "/models/voxtral-mini-4b-realtime",
+        "VOXTRAL_DEVICE": "cpu",
+        "VOXTRAL_DTYPE": "float32"
+      },
+      "aliases": [
+        "voxtral-cpu"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 12884901888,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 1073741824,
+        "gpu_count": 0,
+        "vram_gb": 16.0
+      },
+      "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "voxtral-mini-4b-realtime",
+      "variant_id": "voxtral-mini-4b-realtime-cuda",
+      "stage": "asr",
+      "container": "s2s-voxtral-cuda",
+      "image": "ghcr.io/antibyte/s2s-asr-voxtral-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "voxtral_cuda",
+      "image_download_size_bytes": 7800000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cuda",
+      "experimental": true,
+      "command": [],
+      "environment": {
+        "VOXTRAL_MODEL_DIR": "/models/voxtral-mini-4b-realtime",
+        "VOXTRAL_DEVICE": "cuda",
+        "VOXTRAL_DTYPE": "bfloat16"
+      },
+      "aliases": [
+        "voxtral-cuda"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 12884901888,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 1073741824,
+        "gpu_count": 1,
+        "vram_gb": 16.0
+      },
+      "license": "",
+      "auth_required": false
+    }
+  ]
 }

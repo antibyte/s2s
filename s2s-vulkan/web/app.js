@@ -133,7 +133,7 @@ const els = {
 /** @typedef {{ cpu: number, gpu: number, vram: number }} ResourceStars */
 /** @typedef {{ show: boolean, cpu: boolean, nvidia: boolean, intel: boolean, amd: boolean, vulkan: boolean }} GpuSupport */
 /** @typedef {{ id: string, label: string }} LanguageLabel */
-/** @typedef {{ id: string, stage: string, name: string, tag: string, desc: string, vramGb: number, stars: ResourceStars, gpuSupport: GpuSupport, languageLabels: LanguageLabel[], meta: string, available?: boolean, installed: boolean, bundled: boolean, downloadState: string, downloadSizeBytes: number, downloadedBytes: number, deletable: boolean, downloadError: string, defaultVoice: string, voices: string[], voiceMode: "request"|"restart"|"fixed", licenses: string[], accessUrl: string, authRequired?: boolean, hfTokenConfigured?: boolean, env?: Record<string,string>, note?: string }} EngineOpt */
+/** @typedef {{ id: string, stage: string, name: string, tag: string, desc: string, vramGb: number, stars: ResourceStars, gpuSupport: GpuSupport, languageLabels: LanguageLabel[], meta: string, available?: boolean, compatible: boolean, activatable: boolean, managedRuntime: boolean, variantId: string, installed: boolean, bundled: boolean, downloadState: string, downloadSizeBytes: number, downloadedBytes: number, imageDownloadSizeBytes: number, deletable: boolean, downloadError: string, defaultVoice: string, voices: string[], voiceMode: "request"|"restart"|"fixed", licenses: string[], accessUrl: string, authRequired?: boolean, hfTokenConfigured?: boolean, runtimeState: string, runtimeReason: string, env?: Record<string,string>, note?: string }} EngineOpt */
 
 /** Model choices and presets are populated exclusively from /api/v1/catalog. */
 /** @type {EngineOpt[]} */
@@ -145,6 +145,7 @@ let LLM_OPTIONS = [];
 let PRESETS = {};
 /** @type {Record<string, any> | null} */
 let CAPABILITY = null;
+let CATALOG_REVISION = "";
 /** @type {Record<string, any> | null} */
 let SUGGESTIONS = null;
 /** Heuristic recommendations from /api/v1/suggestions (not benchmarks). */
@@ -439,9 +440,11 @@ function catalogOption(entry) {
     (Array.isArray(entry.artifacts) &&
       entry.artifacts.some((artifact) => artifact?.auth === "huggingface"));
   const hfTokenConfigured = entry.hf_token_configured === true;
+  const compatible = entry.compatible !== undefined ? entry.compatible === true : entry.available === true;
+  const activatable = entry.activatable !== undefined ? entry.activatable === true : entry.available === true;
   const stateNote = runtimeReason
     ? `Host-Agent: ${runtimeReason}`
-    : entry.available
+    : compatible
       ? `${variant.id}${variant.stable ? "" : " · experimental"}${hostManaged ? ` · ${runtimeState}` : ""}`
       : entry.reason || "Auf diesem System nicht verfügbar";
   const accessNote = licenses.length
@@ -466,12 +469,17 @@ function catalogOption(entry) {
     gpuSupport: gpuSupportFromVariants(entry.variants),
     languageLabels: languageLabelsFromCatalog(entry.languages),
     meta: `${entry.model || entry.protocol} · ${accelerator}${hostManaged ? " · Windows host" : ""}`,
-    available: entry.available === true && runtimeState !== "unavailable",
+    available: activatable && runtimeState !== "unavailable",
+    compatible,
+    activatable,
+    managedRuntime: Boolean(variant?.container),
+    variantId: entry.variant_id || variant?.id || "",
     installed: entry.installed === true,
     bundled: entry.bundled === true,
     downloadState: entry.download_state || (entry.installed ? "installed" : "missing"),
     downloadSizeBytes: Number(entry.download_size_bytes || 0),
     downloadedBytes: Number(entry.downloaded_bytes || 0),
+    imageDownloadSizeBytes: Number(entry.image_download_size_bytes || 0),
     deletable: entry.deletable === true,
     downloadError: entry.download_error || "",
     defaultVoice: entry.default_voice || "",
@@ -499,6 +507,7 @@ async function loadBackendCatalog({ quiet = false } = {}) {
     if (![1, 2].includes(catalog.schema_version) || !Array.isArray(catalog.backends)) {
       throw new Error("unsupported catalog response");
     }
+    CATALOG_REVISION = String(catalog.catalog_revision || "");
     const options = catalog.backends.map(catalogOption);
     const asr = options.filter((option, index) => catalog.backends[index].stage === "asr");
     const tts = options.filter((option, index) => catalog.backends[index].stage === "tts");
@@ -1169,25 +1178,107 @@ async function waitForModelDownload(opt) {
   }
 }
 
-async function ensureModelInstalled(opt) {
+async function waitForModuleInstall(opt) {
+  if (!els.modelDialog) return false;
+  resetModelDialog();
+  const token = { backendId: opt.id, cancelled: false };
+  activeModelDownload = token;
+  const totalBytes = opt.downloadSizeBytes + opt.imageDownloadSizeBytes;
+  els.modelDialogTitle.textContent = `${opt.name} wird installiert`;
+  els.modelDialogCopy.textContent =
+    "Modell und signierte Laufzeit werden fortsetzbar installiert. Die aktive Pipeline bleibt bis zur erfolgreichen Aktivierung unverändert.";
+  els.modelDialogSize.textContent =
+    `Modell: ${formatModelSize(opt.downloadSizeBytes)} · Image: ${formatModelSize(opt.imageDownloadSizeBytes)}`;
+  els.modelProgress.hidden = false;
+  els.modelDialogConfirm.hidden = true;
+  els.modelDialogCancel.textContent = "Installation abbrechen";
+  setModelDialogProgress(opt.downloadedBytes, totalBytes);
+  if (!els.modelDialog.open) els.modelDialog.showModal();
+  els.modelDialog.oncancel = (event) => event.preventDefault();
+  els.modelDialogCancel.onclick = async () => {
+    if (token.cancelled) return;
+    token.cancelled = true;
+    els.modelDialogCancel.disabled = true;
+    els.modelDialogCancel.textContent = "Wird abgebrochen…";
+    try {
+      await apiRequest(`/api/v1/modules/${encodeURIComponent(opt.id)}/install`, {
+        method: "DELETE",
+      });
+    } catch (error) {
+      if (els.modelDialogError) {
+        els.modelDialogError.hidden = false;
+        els.modelDialogError.textContent = error.message;
+      }
+    }
+  };
+  try {
+    while (!token.cancelled) {
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+      const current = await apiRequest(`/api/v1/modules/${encodeURIComponent(opt.id)}/install`);
+      const downloaded = Number(current.model_downloaded_bytes || 0) +
+        Number(current.image_downloaded_bytes || 0);
+      const total = Number(current.model_total_bytes || 0) +
+        Number(current.image_download_size_bytes || 0);
+      setModelDialogProgress(downloaded, total || totalBytes);
+      if (current.state === "ready") {
+        if (els.modelDialog.open) els.modelDialog.close();
+        await loadBackendCatalog({ quiet: true });
+        showToast(`${opt.name} ist installiert und aktivierbar`);
+        return true;
+      }
+      if (["failed", "cancelled", "unavailable", "needs_configuration", "needs_credentials", "unhealthy", "host_module_delivery_pending"].includes(current.state)) {
+        throw new Error(current.error || `Laufzeitstatus: ${current.state}`);
+      }
+    }
+    if (els.modelDialog.open) els.modelDialog.close();
+    await loadBackendCatalog({ quiet: true });
+    showToast("Installation abgebrochen", { ms: 1600 });
+    return false;
+  } catch (error) {
+    if (els.modelDialogError) {
+      els.modelDialogError.hidden = false;
+      els.modelDialogError.textContent = error.message;
+    }
+    els.modelDialogCancel.disabled = false;
+    els.modelDialogCancel.textContent = "Schließen";
+    els.modelDialogCancel.onclick = () => {
+      if (els.modelDialog.open) els.modelDialog.close();
+    };
+    showToast(`Installation fehlgeschlagen: ${error.message}`, { error: true, ms: 3200 });
+    return false;
+  } finally {
+    if (activeModelDownload === token) activeModelDownload = null;
+    els.modelDialog.oncancel = null;
+  }
+}
+
+async function ensureModuleReady(opt) {
   if (!opt) {
     showToast("Modell ist nicht im Backend-Katalog vorhanden", { error: true, ms: 2800 });
     return false;
   }
-  if (opt.installed || opt.bundled) return true;
-  const compatibilityNote = opt.available
-    ? ""
-    : ` Der Download ist möglich, die Aktivierung bleibt jedoch gesperrt: ${
-        opt.note || "keine kompatible Laufzeitvariante"
-      }`;
+  if (opt.activatable) return true;
+  if (!opt.compatible) {
+    showToast(opt.note || "Auf diesem System ist keine veröffentlichte Variante kompatibel", {
+      error: true,
+      ms: 3200,
+    });
+    return false;
+  }
+  if (!opt.managedRuntime || ["host_module_delivery_pending", "needs_configuration", "needs_credentials", "unhealthy", "unavailable"].includes(opt.runtimeState)) {
+    showToast(opt.runtimeReason || `Laufzeitstatus: ${opt.runtimeState}`, { error: true, ms: 3200 });
+    return false;
+  }
   const needsHf = Boolean(opt.authRequired || opt.accessUrl);
+  const licenseNote = opt.licenses.length ? ` Lizenz: ${opt.licenses.join(" + ")}.` : "";
   const approved = await confirmModelAction({
-    title: "Modell herunterladen",
+    title: "Speech-Lab-Modul installieren",
     message:
-      `${opt.name} ist noch nicht installiert und muss vor der Auswahl heruntergeladen werden.` +
-      compatibilityNote,
-    size: `Benötigter Download: ${formatModelSize(opt.downloadSizeBytes)}`,
-    confirmLabel: "OK · herunterladen",
+      `${opt.name} installiert nur die ausgewählte Variante „${opt.variantId}“.` + licenseNote,
+    size:
+      `Modell: ${formatModelSize(opt.downloadSizeBytes)} · ` +
+      `Image: ${formatModelSize(opt.imageDownloadSizeBytes)}`,
+    confirmLabel: "OK · installieren",
     hfAuth: needsHf
       ? {
           accessUrl: opt.accessUrl || "",
@@ -1197,46 +1288,54 @@ async function ensureModelInstalled(opt) {
   });
   if (!approved) return false;
   try {
-    const body = {};
+    const body = { catalog_revision: CATALOG_REVISION };
     if (needsHf) {
       if (approved.hfToken) body.hf_token = approved.hfToken;
       body.remember = approved.remember !== false;
     }
-    await apiRequest(`/api/v1/models/${encodeURIComponent(opt.id)}/download`, {
+    await apiRequest(`/api/v1/modules/${encodeURIComponent(opt.id)}/install`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
   } catch (error) {
-    showToast(`Download konnte nicht gestartet werden: ${error.message}`, {
+    showToast(`Installation konnte nicht gestartet werden: ${error.message}`, {
       error: true,
       ms: 3200,
     });
     return false;
   }
-  return waitForModelDownload(opt);
+  return waitForModuleInstall(opt);
 }
 
 async function deleteInstalledModel(opt) {
-  if (!opt?.deletable || !opt.installed) return;
+  if (!opt || (!opt.installed && !["ready", "running"].includes(opt.runtimeState))) return;
   const approved = await confirmModelAction({
     title: "Modell löschen",
-    message: `${opt.name} wird aus dem persistenten Modell-Volume gelöscht.`,
-    size: `Freigegebener Speicher: ${formatModelSize(opt.downloadSizeBytes)}`,
-    confirmLabel: "Modell löschen",
+    message: `${opt.name} wird deinstalliert. Aktive Module können nicht entfernt werden.`,
+    size:
+      `Modell: ${formatModelSize(opt.downloadSizeBytes)} · ` +
+      `Image-Laufzeit: ${formatModelSize(opt.imageDownloadSizeBytes)}`,
+    confirmLabel: "Modul deinstallieren",
     danger: true,
   });
   if (!approved) return;
   try {
-    await apiRequest(`/api/v1/models/${encodeURIComponent(opt.id)}`, { method: "DELETE" });
+    await apiRequest(`/api/v1/modules/${encodeURIComponent(opt.id)}`, { method: "DELETE" });
     await loadBackendCatalog({ quiet: true });
-    showToast(`${opt.name} wurde gelöscht`);
+    showToast(`${opt.name} wurde deinstalliert`);
   } catch (error) {
     showToast(`Löschen nicht möglich: ${error.message}`, { error: true, ms: 3200 });
   }
 }
 
 function modelStatus(opt) {
+  if (opt.activatable) {
+    return `Bereit · Modell ${formatModelSize(opt.downloadSizeBytes)} · Image ${formatModelSize(opt.imageDownloadSizeBytes)}`;
+  }
+  if (opt.compatible && opt.managedRuntime && !["unavailable", "needs_configuration", "host_module_delivery_pending"].includes(opt.runtimeState)) {
+    return `Installation nötig · Modell ${formatModelSize(opt.downloadSizeBytes)} · Image ${formatModelSize(opt.imageDownloadSizeBytes)}`;
+  }
   if (opt.bundled) return "Im Container enthalten";
   if (opt.downloadState === "downloading") {
     const percent =
@@ -1261,7 +1360,7 @@ function isRecommendedOption(opt) {
 function choiceButton(opt, selectedId) {
   const sel = opt.id === selectedId;
   const avail = opt.available !== false;
-  const downloadOnly = !avail && !opt.installed && !opt.bundled;
+  const downloadOnly = !avail && opt.compatible && opt.managedRuntime && !["unavailable", "needs_configuration", "host_module_delivery_pending"].includes(opt.runtimeState);
   const recommended = isRecommendedOption(opt);
   return `
     <div class="choice-wrap">
@@ -1271,6 +1370,7 @@ function choiceButton(opt, selectedId) {
       role="option" data-id="${opt.id}"
       aria-selected="${sel ? "true" : "false"}"
       data-available="${avail ? "true" : "false"}"
+      data-compatible="${opt.compatible ? "true" : "false"}"
       data-installed="${opt.installed ? "true" : "false"}"
       ${
         avail
@@ -1297,7 +1397,7 @@ function choiceButton(opt, selectedId) {
       <span class="choice-install-state" data-state="${opt.downloadState}">${modelStatus(opt)}</span>
     </button>
     ${
-      opt.deletable && opt.installed
+      (opt.deletable && opt.installed) || ["ready", "running"].includes(opt.runtimeState)
         ? `<button type="button" class="choice-delete" data-delete-id="${opt.id}"
             ${sel ? "disabled title=\"Aktives Modell kann nicht gelöscht werden\"" : ""}
             aria-label="${opt.name} löschen">Löschen</button>`
@@ -1311,7 +1411,7 @@ function renderChoices(container, options, selectedId, onPick) {
   container.innerHTML = options.map((o) => choiceButton(o, selectedId)).join("");
   container.querySelectorAll(".choice-select").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (btn.dataset.available === "false" && btn.dataset.installed === "true") {
+      if (btn.dataset.available === "false" && btn.dataset.compatible !== "true") {
         const opt = options.find((item) => item.id === btn.dataset.id);
         log(`„${btn.dataset.id}“ kann auf diesem System nicht aktiviert werden`);
         showToast(opt?.note || "Auf diesem System nicht verfügbar", {
@@ -1401,7 +1501,7 @@ async function applyPreset(id) {
     LLM_OPTIONS.find((item) => item.id === p.llm),
   ];
   for (const opt of targets) {
-    if (!(await ensureModelInstalled(opt))) return;
+    if (!(await ensureModuleReady(opt))) return;
     const current = allModelOptions().find((item) => item.id === opt?.id);
     if (!current?.available) {
       showToast(`${current?.name || opt?.id} ist installiert, aber nicht aktivierbar`, {
@@ -1446,7 +1546,7 @@ function refreshLabUi(composeOverride) {
   syncVoiceForTts(tts);
 
   renderChoices(els.asrChoices, ASR_OPTIONS, lab.asr, async (id) => {
-    if (!(await ensureModelInstalled(ASR_OPTIONS.find((item) => item.id === id)))) return;
+    if (!(await ensureModuleReady(ASR_OPTIONS.find((item) => item.id === id)))) return;
     const current = ASR_OPTIONS.find((item) => item.id === id);
     if (!current?.available) {
       showToast(`${current?.name || id} ist installiert, aber nicht aktivierbar`, {
@@ -1462,7 +1562,7 @@ function refreshLabUi(composeOverride) {
     sendStackToBackend();
   });
   renderChoices(els.ttsChoices, TTS_OPTIONS, lab.tts, async (id) => {
-    if (!(await ensureModelInstalled(TTS_OPTIONS.find((item) => item.id === id)))) return;
+    if (!(await ensureModuleReady(TTS_OPTIONS.find((item) => item.id === id)))) return;
     const current = TTS_OPTIONS.find((item) => item.id === id);
     if (!current?.available) {
       showToast(`${current?.name || id} ist installiert, aber nicht aktivierbar`, {
@@ -1479,7 +1579,7 @@ function refreshLabUi(composeOverride) {
     sendStackToBackend();
   });
   renderChoices(els.llmChoices, LLM_OPTIONS, lab.llm, async (id) => {
-    if (!(await ensureModelInstalled(LLM_OPTIONS.find((item) => item.id === id)))) return;
+    if (!(await ensureModuleReady(LLM_OPTIONS.find((item) => item.id === id)))) return;
     const current = LLM_OPTIONS.find((item) => item.id === id);
     if (!current?.available) {
       showToast(`${current?.name || id} ist installiert, aber nicht aktivierbar`, {

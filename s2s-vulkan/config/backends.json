@@ -467,6 +467,8 @@
             "linux"
           ],
           "stable": false,
+          "published": false,
+          "runtime_delivery_reason": "image_not_published_for_architecture",
           "endpoint": "http://parakeet-xpu:8082",
           "native_endpoint": "http://127.0.0.1:8082",
           "container": "s2s-parakeet-xpu",
@@ -743,6 +745,8 @@
             "linux"
           ],
           "stable": false,
+          "published": false,
+          "runtime_delivery_reason": "image_not_published_for_architecture",
           "endpoint": "http://whisper-cpp:8082",
           "native_endpoint": "http://127.0.0.1:8082",
           "container": "s2s-whisper-cpp",
@@ -763,6 +767,8 @@
             "windows"
           ],
           "stable": false,
+          "published": false,
+          "runtime_delivery_reason": "image_not_published_for_architecture",
           "endpoint": "http://whisper-cpp:8082",
           "native_endpoint": "http://127.0.0.1:8082",
           "container": "s2s-whisper-cpp",

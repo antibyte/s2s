@@ -8,6 +8,10 @@ use std::path::{Component, Path};
 
 const EMBEDDED_CATALOG: &str = include_str!("../config/backends.json");
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendStage {
@@ -62,6 +66,13 @@ pub struct BackendVariant {
     pub platforms: Vec<String>,
     #[serde(default)]
     pub stable: bool,
+    /// False when a catalog entry documents a future runtime but no immutable
+    /// image is published for it yet. Such variants are never advertised as
+    /// compatible, even with experimental opt-in.
+    #[serde(default = "default_true")]
+    pub published: bool,
+    #[serde(default)]
+    pub runtime_delivery_reason: String,
     #[serde(default)]
     pub device_match: Vec<String>,
     #[serde(default)]
@@ -72,6 +83,10 @@ pub struct BackendVariant {
     pub container: String,
     #[serde(default)]
     pub image: String,
+    /// Compressed image transfer estimate. The managed controller may replace
+    /// this catalog hint with the exact signed-bundle value at runtime.
+    #[serde(default)]
+    pub image_download_size_bytes: u64,
     #[serde(default)]
     pub health_path: String,
     #[serde(default)]
@@ -176,8 +191,13 @@ pub struct CatalogBackendStatus {
     #[serde(flatten)]
     pub backend: BackendDefinition,
     pub available: bool,
+    /// Hardware/platform compatibility independent of installation state.
+    pub compatible: bool,
+    /// True only when the selected runtime can be activated immediately.
+    pub activatable: bool,
     pub reason: String,
     pub selected_variant: Option<BackendVariant>,
+    pub variant_id: String,
     pub installed: bool,
     pub download_state: String,
     pub download_size_bytes: u64,
@@ -187,6 +207,7 @@ pub struct CatalogBackendStatus {
     pub host_managed: bool,
     pub runtime_state: String,
     pub runtime_reason: String,
+    pub image_download_size_bytes: u64,
     /// True when any selected (or base) artifact needs Hugging Face auth.
     /// Tokens themselves are never exposed through the catalog API.
     #[serde(default)]
@@ -702,16 +723,38 @@ impl BackendCatalog {
                     deletable: !bundled,
                     download_error: String::new(),
                     host_managed,
-                    runtime_state: if host_managed {
-                        "unknown".into()
+                    runtime_state: selected_variant
+                        .as_ref()
+                        .map(|variant| {
+                            if host_managed {
+                                "host_module_delivery_pending"
+                            } else if !variant.container.is_empty() {
+                                "missing"
+                            } else {
+                                "external"
+                            }
+                        })
+                        .unwrap_or("unavailable")
+                        .into(),
+                    runtime_reason: if host_managed {
+                        "managed Windows host-module delivery is not installed".into()
                     } else {
-                        "not_managed".into()
+                        String::new()
                     },
-                    runtime_reason: String::new(),
+                    image_download_size_bytes: selected_variant
+                        .as_ref()
+                        .map(|variant| variant.image_download_size_bytes)
+                        .unwrap_or_default(),
+                    variant_id: selected_variant
+                        .as_ref()
+                        .map(|variant| variant.id.clone())
+                        .unwrap_or_default(),
                     auth_required,
                     hf_token_configured: false,
                     backend,
                     available,
+                    compatible: available,
+                    activatable: available && !host_managed,
                     reason,
                     selected_variant,
                 }
@@ -764,6 +807,9 @@ pub fn variant_is_compatible(variant: &BackendVariant, hw: &HardwareProfile) -> 
 }
 
 fn variant_matches(variant: &BackendVariant, hw: &HardwareProfile) -> bool {
+    if !variant.published {
+        return false;
+    }
     let vendor_ok = variant.vendors.is_empty()
         || variant
             .vendors
@@ -797,6 +843,16 @@ pub fn variant_rank(variant: &BackendVariant, hw: &HardwareProfile) -> u8 {
 }
 
 fn incompatibility_reason(backend: &BackendDefinition, hw: &HardwareProfile) -> String {
+    if backend.variants.iter().all(|variant| !variant.published) {
+        return backend
+            .variants
+            .iter()
+            .find_map(|variant| {
+                (!variant.runtime_delivery_reason.is_empty())
+                    .then(|| variant.runtime_delivery_reason.clone())
+            })
+            .unwrap_or_else(|| "runtime image is not published".into());
+    }
     let platform_match = backend
         .variants
         .iter()
@@ -1478,13 +1534,23 @@ mod tests {
     }
 
     #[test]
-    fn parakeet_xpu_requires_linux_experimental_opt_in() {
+    fn unpublished_parakeet_xpu_is_not_advertised_as_compatible() {
         let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
         let backend = catalog.find("parakeet-tdt-0.6b-v3").unwrap();
         let mut hardware = hw("intel", &["sycl", "cpu"]);
         hardware.allow_experimental = true;
         let selected = resolve_variant(backend, &hardware).unwrap();
-        assert_eq!(selected.id, "parakeet-tdt-0.6b-v3-xpu");
+        assert_eq!(selected.id, "parakeet-tdt-0.6b-v3-cpu");
+        let xpu = backend
+            .variants
+            .iter()
+            .find(|variant| variant.id == "parakeet-tdt-0.6b-v3-xpu")
+            .unwrap();
+        assert!(!xpu.published);
+        assert_eq!(
+            xpu.runtime_delivery_reason,
+            "image_not_published_for_architecture"
+        );
     }
 
     #[test]

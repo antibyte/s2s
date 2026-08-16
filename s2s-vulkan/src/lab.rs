@@ -165,6 +165,18 @@ pub(crate) fn stage_is_ready(
     })
 }
 
+fn activation_error_code(message: &str) -> &'static str {
+    if message.contains("module_not_provisioned") {
+        "module_not_provisioned"
+    } else if message.contains("host_module_delivery_pending") {
+        "host_module_delivery_pending"
+    } else if message.contains("not installed") {
+        "model_not_installed"
+    } else {
+        "stack_activation_failed"
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LabEvent {
@@ -227,12 +239,15 @@ pub struct LabStackStatus {
     pub tts_transition: StageTransition,
     pub llm_transition: StageTransition,
     pub ok: bool,
+    pub error_code: String,
     pub message: String,
+    pub last_transition_error: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LabCatalogResponse {
     pub schema_version: u32,
+    pub catalog_revision: String,
     pub hardware: HardwareProfile,
     pub backends: Vec<CatalogBackendStatus>,
     pub presets: Vec<StackPreset>,
@@ -247,6 +262,32 @@ pub struct ModelActionResponse {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct RuntimeProvisionStatus {
+    pub state: String,
+    #[serde(default)]
+    pub image: String,
+    #[serde(default)]
+    pub image_download_size_bytes: u64,
+    #[serde(default)]
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModuleStatusResponse {
+    pub operation_id: String,
+    pub backend_id: String,
+    pub variant_id: String,
+    pub state: String,
+    pub model_state: String,
+    pub runtime_state: String,
+    pub model_downloaded_bytes: u64,
+    pub model_total_bytes: u64,
+    pub image_download_size_bytes: u64,
+    pub image_downloaded_bytes: u64,
+    pub error: String,
+}
+
 /// Optional body for `POST /api/v1/models/{id}/download`.
 /// Tokens are accepted for gated Hugging Face artifacts and are never returned
 /// by the catalog API.
@@ -259,6 +300,17 @@ pub struct ModelDownloadRequest {
     pub hf_token: Option<String>,
     /// When true (default), keep a non-empty token in memory for later downloads
     /// in this process. Never written to the catalog response or logs.
+    #[serde(default = "default_remember_hf_token")]
+    pub remember: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModuleInstallRequest {
+    #[serde(default)]
+    pub catalog_revision: String,
+    #[serde(default)]
+    pub hf_token: Option<String>,
     #[serde(default = "default_remember_hf_token")]
     pub remember: bool,
 }
@@ -285,6 +337,7 @@ struct ControllerState {
     asr_transition: StageTransition,
     tts_transition: StageTransition,
     llm_transition: StageTransition,
+    last_transition_error: String,
 }
 
 impl Default for ControllerState {
@@ -296,6 +349,7 @@ impl Default for ControllerState {
             asr_transition: StageTransition::idle(BackendStage::Asr),
             tts_transition: StageTransition::idle(BackendStage::Tts),
             llm_transition: StageTransition::idle(BackendStage::Llm),
+            last_transition_error: String::new(),
         }
     }
 }
@@ -316,6 +370,27 @@ pub trait ContainerControl: Send + Sync {
     async fn list_managed_running(&self) -> Result<Vec<String>> {
         Ok(Vec::new())
     }
+    async fn runtime_status(&self, _variant_id: &str) -> Result<RuntimeProvisionStatus> {
+        Ok(RuntimeProvisionStatus {
+            state: "missing".into(),
+            ..RuntimeProvisionStatus::default()
+        })
+    }
+    async fn install(&self, _variant_id: &str) -> Result<RuntimeProvisionStatus> {
+        Err(anyhow!("managed runtime installation is unavailable"))
+    }
+    async fn remove(&self, _variant_id: &str) -> Result<()> {
+        Err(anyhow!("managed runtime removal is unavailable"))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ModuleInstallRecord {
+    operation_id: String,
+    variant_id: String,
+    state: String,
+    error: String,
+    cancel: Arc<AtomicBool>,
 }
 
 #[derive(Debug)]
@@ -350,6 +425,7 @@ impl ContainerControl for DisabledContainerControl {
 pub struct DockerProxyControl {
     client: reqwest::Client,
     base_url: String,
+    token: String,
 }
 
 impl DockerProxyControl {
@@ -363,15 +439,24 @@ impl DockerProxyControl {
                 .timeout(Duration::from_secs(20))
                 .build()?,
             base_url,
+            token: std::env::var("S2S_DOCKER_PROXY_TOKEN_FILE")
+                .ok()
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .map(|token| token.trim().to_string())
+                .filter(|token| !token.is_empty())
+                .ok_or_else(|| anyhow!("S2S_DOCKER_PROXY_TOKEN_FILE is required"))?,
         })
+    }
+
+    fn request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
+        self.client.request(method, url).bearer_auth(&self.token)
     }
 
     async fn post_action(&self, container: &str, action: &str) -> Result<()> {
         self.inspect_managed(container).await?;
         let url = format!("{}/containers/{container}/{action}", self.base_url);
         let response = self
-            .client
-            .post(&url)
+            .request(reqwest::Method::POST, &url)
             .send()
             .await
             .with_context(|| format!("Docker proxy POST {url}"))?;
@@ -390,7 +475,7 @@ impl DockerProxyControl {
 
     async fn inspect_managed(&self, container: &str) -> Result<serde_json::Value> {
         let url = format!("{}/containers/{container}/json", self.base_url);
-        let response = self.client.get(&url).send().await?;
+        let response = self.request(reqwest::Method::GET, &url).send().await?;
         if response.status().as_u16() == 404 {
             return Err(anyhow!(
                 "managed container '{container}' does not exist; create the lab profiles first"
@@ -458,8 +543,7 @@ impl ContainerControl for DockerProxyControl {
         let encoded = urlencoding_encode(&filters.to_string());
         let url = format!("{}/containers/json?filters={encoded}", self.base_url);
         let response = self
-            .client
-            .get(&url)
+            .request(reqwest::Method::GET, &url)
             .send()
             .await
             .with_context(|| format!("Docker proxy list {url}"))?;
@@ -495,6 +579,66 @@ impl ContainerControl for DockerProxyControl {
             }
         }
         Ok(names)
+    }
+
+    async fn runtime_status(&self, variant_id: &str) -> Result<RuntimeProvisionStatus> {
+        let url = format!(
+            "{}/s2s/modules/{}",
+            self.base_url,
+            urlencoding_encode(variant_id)
+        );
+        let response = self
+            .request(reqwest::Method::GET, &url)
+            .send()
+            .await
+            .with_context(|| format!("controller GET {url}"))?;
+        if !response.status().is_success() {
+            return Err(anyhow!(
+                "controller runtime status returned {}",
+                response.status()
+            ));
+        }
+        Ok(response.json().await?)
+    }
+
+    async fn install(&self, variant_id: &str) -> Result<RuntimeProvisionStatus> {
+        let url = format!(
+            "{}/s2s/modules/{}/install",
+            self.base_url,
+            urlencoding_encode(variant_id)
+        );
+        let response = self
+            .request(reqwest::Method::POST, &url)
+            .send()
+            .await
+            .with_context(|| format!("controller POST {url}"))?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(anyhow!("controller install {status}: {body}"));
+        }
+        Ok(serde_json::from_str(&body)?)
+    }
+
+    async fn remove(&self, variant_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/s2s/modules/{}",
+            self.base_url,
+            urlencoding_encode(variant_id)
+        );
+        let response = self
+            .request(reqwest::Method::DELETE, &url)
+            .send()
+            .await
+            .with_context(|| format!("controller DELETE {url}"))?;
+        if response.status().is_success() {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "controller remove returned {}: {}",
+            response.status(),
+            response.text().await.unwrap_or_default()
+        ))
     }
 }
 
@@ -547,6 +691,7 @@ struct IdleUnloadState {
 #[derive(Clone)]
 pub struct LabController {
     catalog: Arc<BackendCatalog>,
+    catalog_revision: String,
     hardware: HardwareProfile,
     /// Shared with the gateway ASR/TTS proxy.
     pub(crate) runtime: SharedRuntime,
@@ -562,6 +707,7 @@ pub struct LabController {
     llm_lock: Arc<Mutex<()>>,
     model_lock: Arc<Mutex<()>>,
     downloads: Arc<RwLock<HashMap<String, ModelDownloadRecord>>>,
+    modules: Arc<RwLock<HashMap<String, ModuleInstallRecord>>>,
     /// Session-scoped Hugging Face token from the Lab UI (never catalog-exported).
     hf_token: Arc<RwLock<Option<String>>>,
     desired_llm: Arc<RwLock<String>>,
@@ -594,6 +740,7 @@ impl LabController {
         docker_control_enabled: bool,
     ) -> Result<Self> {
         catalog.validate()?;
+        let catalog_revision = hex::encode(Sha256::digest(serde_json::to_vec(&catalog)?));
         let desired_llm = runtime
             .try_read()
             .map(|state| state.llm_id.clone())
@@ -601,6 +748,7 @@ impl LabController {
         let (events, _) = broadcast::channel(64);
         Ok(Self {
             catalog: Arc::new(catalog),
+            catalog_revision,
             hardware,
             runtime,
             control,
@@ -616,6 +764,7 @@ impl LabController {
             llm_lock: Arc::new(Mutex::new(())),
             model_lock: Arc::new(Mutex::new(())),
             downloads: Arc::new(RwLock::new(HashMap::new())),
+            modules: Arc::new(RwLock::new(HashMap::new())),
             hf_token: Arc::new(RwLock::new(None)),
             desired_llm: Arc::new(RwLock::new(desired_llm)),
             events,
@@ -1247,6 +1396,8 @@ impl LabController {
         for status in &mut backends {
             status.hf_token_configured = hf_token_configured;
             let Some(variant) = status.selected_variant.as_ref() else {
+                status.available = false;
+                status.activatable = false;
                 continue;
             };
             if status.host_managed {
@@ -1257,43 +1408,78 @@ impl LabController {
                         status.runtime_reason = reason;
                     }
                     None => {
-                        status.runtime_state = "unavailable".into();
+                        status.runtime_state = "host_module_delivery_pending".into();
                         status.runtime_reason =
-                            "Windows host agent is not running or has no status file".into();
+                            "managed Windows host-module delivery is not installed".into();
                     }
                 }
+            } else if !variant.container.is_empty() {
+                if !self.docker_control_enabled {
+                    status.runtime_state = "unavailable".into();
+                    status.runtime_reason = "managed Speech Lab controller is unavailable".into();
+                } else {
+                    match self.control.runtime_status(&variant.id).await {
+                        Ok(runtime) => {
+                            status.runtime_state = runtime.state;
+                            status.runtime_reason = runtime.error;
+                            if runtime.image_download_size_bytes > 0 {
+                                status.image_download_size_bytes =
+                                    runtime.image_download_size_bytes;
+                            }
+                        }
+                        Err(error) => {
+                            status.runtime_state = "error".into();
+                            status.runtime_reason = format!("{error:#}");
+                        }
+                    }
+                }
+            } else {
+                let endpoint = self.stage_endpoint(&status.backend, variant);
+                let (state, reason) = self
+                    .remote_runtime_status(&status.backend, variant, &endpoint)
+                    .await;
+                status.runtime_state = state;
+                status.runtime_reason = reason;
             }
             if variant_bundled(&status.backend, variant) {
                 status.installed = true;
                 status.download_state = "bundled".into();
                 status.downloaded_bytes = status.download_size_bytes;
                 status.deletable = false;
-                continue;
-            }
-            let (installed, downloaded_bytes) = model_installation_state(&status.backend, variant)
-                .await
-                .unwrap_or((false, 0));
-            status.installed = installed;
-            status.downloaded_bytes = downloaded_bytes;
-            status.download_state = if installed {
-                "installed".into()
             } else {
-                "missing".into()
-            };
-            if let Some(record) = downloads
-                .get(&status.backend.id)
-                .filter(|record| record.variant_id == variant.id)
-            {
-                status.download_state = record.state.clone();
-                status.downloaded_bytes = record.downloaded_bytes;
-                status.download_error = record.error.clone();
-                if record.state == "installed" {
-                    status.installed = true;
+                let (installed, downloaded_bytes) =
+                    model_installation_state(&status.backend, variant)
+                        .await
+                        .unwrap_or((false, 0));
+                status.installed = installed;
+                status.downloaded_bytes = downloaded_bytes;
+                status.download_state = if installed {
+                    "installed".into()
+                } else {
+                    "missing".into()
+                };
+                if let Some(record) = downloads
+                    .get(&status.backend.id)
+                    .filter(|record| record.variant_id == variant.id)
+                {
+                    status.download_state = record.state.clone();
+                    status.downloaded_bytes = record.downloaded_bytes;
+                    status.download_error = record.error.clone();
+                    if record.state == "installed" {
+                        status.installed = true;
+                    }
                 }
             }
+            let runtime_ready = matches!(
+                status.runtime_state.as_str(),
+                "ready" | "running" | "external"
+            );
+            status.activatable = status.compatible && status.installed && runtime_ready;
+            status.available = status.activatable;
         }
         LabCatalogResponse {
             schema_version: self.catalog.schema_version,
+            catalog_revision: self.catalog_revision.clone(),
             hardware: capability,
             backends,
             presets: self.catalog.presets.clone(),
@@ -1302,6 +1488,263 @@ impl LabController {
 
     pub fn subscribe(&self) -> broadcast::Receiver<LabEvent> {
         self.events.subscribe()
+    }
+
+    pub async fn module_status(&self, backend_id: &str) -> Result<ModuleStatusResponse> {
+        let backend = self
+            .catalog
+            .find(backend_id)
+            .ok_or_else(|| anyhow!("unknown backend id '{backend_id}'"))?;
+        let variant = resolve_variant(backend, &self.hardware)
+            .ok_or_else(|| anyhow!("backend '{backend_id}' has no compatible variant"))?;
+        let total_bytes = variant_artifacts(backend, variant)
+            .iter()
+            .map(|artifact| artifact.size)
+            .sum();
+        let (installed, mut downloaded_bytes) = model_installation_state(backend, variant).await?;
+        let mut model_state = if variant_bundled(backend, variant) {
+            "bundled".to_string()
+        } else if installed {
+            "installed".to_string()
+        } else {
+            "missing".to_string()
+        };
+        if let Some(download) = self.downloads.read().await.get(backend_id) {
+            if download.variant_id == variant.id {
+                model_state = download.state.clone();
+                downloaded_bytes = download.downloaded_bytes;
+            }
+        }
+        let runtime = if !variant.host_profile.is_empty() {
+            RuntimeProvisionStatus {
+                state: "host_module_delivery_pending".into(),
+                error: "managed Windows host-module delivery is not installed".into(),
+                ..RuntimeProvisionStatus::default()
+            }
+        } else if variant.container.is_empty() {
+            let endpoint = self.stage_endpoint(backend, variant);
+            let (state, error) = self
+                .remote_runtime_status(backend, variant, &endpoint)
+                .await;
+            RuntimeProvisionStatus {
+                state,
+                error,
+                ..RuntimeProvisionStatus::default()
+            }
+        } else if self.docker_control_enabled {
+            self.control.runtime_status(&variant.id).await?
+        } else {
+            RuntimeProvisionStatus {
+                state: "unavailable".into(),
+                error: "managed Speech Lab controller is unavailable".into(),
+                ..RuntimeProvisionStatus::default()
+            }
+        };
+        let record = self.modules.read().await.get(backend_id).cloned();
+        let operation_id = record
+            .as_ref()
+            .map(|record| record.operation_id.clone())
+            .unwrap_or_default();
+        let mut state = if matches!(runtime.state.as_str(), "ready" | "running" | "external")
+            && matches!(model_state.as_str(), "bundled" | "installed")
+        {
+            "ready".to_string()
+        } else {
+            runtime.state.clone()
+        };
+        let mut error = runtime.error;
+        if let Some(record) = record {
+            if record.variant_id == variant.id
+                && matches!(record.state.as_str(), "installing" | "failed" | "cancelled")
+            {
+                state = record.state;
+                if !record.error.is_empty() {
+                    error = record.error;
+                }
+            }
+        }
+        let image_download_size_bytes = runtime
+            .image_download_size_bytes
+            .max(variant.image_download_size_bytes);
+        let image_downloaded_bytes = if matches!(runtime.state.as_str(), "ready" | "running") {
+            image_download_size_bytes
+        } else {
+            0
+        };
+        Ok(ModuleStatusResponse {
+            operation_id,
+            backend_id: backend_id.into(),
+            variant_id: variant.id.clone(),
+            state,
+            model_state,
+            runtime_state: runtime.state,
+            model_downloaded_bytes: downloaded_bytes,
+            model_total_bytes: total_bytes,
+            image_download_size_bytes,
+            image_downloaded_bytes,
+            error,
+        })
+    }
+
+    pub async fn start_module_install(
+        &self,
+        backend_id: &str,
+        request: ModuleInstallRequest,
+    ) -> Result<ModuleStatusResponse> {
+        if !request.catalog_revision.trim().is_empty()
+            && request.catalog_revision.trim() != self.catalog_revision
+        {
+            return Err(anyhow!(
+                "catalog revision changed; refresh the catalog before installing"
+            ));
+        }
+        let backend = self
+            .catalog
+            .find(backend_id)
+            .ok_or_else(|| anyhow!("unknown backend id '{backend_id}'"))?;
+        let variant = resolve_variant(backend, &self.hardware)
+            .ok_or_else(|| anyhow!("backend '{backend_id}' has no compatible variant"))?;
+        if !variant.host_profile.is_empty() {
+            return Err(anyhow!(
+                "host_module_delivery_pending: managed Windows host-module delivery is not installed"
+            ));
+        }
+        if variant.container.is_empty() {
+            return self.module_status(backend_id).await;
+        }
+        if !self.docker_control_enabled {
+            return Err(anyhow!("managed Speech Lab controller is unavailable"));
+        }
+        let bundled = variant_bundled(backend, variant);
+        if !bundled {
+            let (installed, downloaded) = model_installation_state(backend, variant).await?;
+            if !installed {
+                let _ = downloaded;
+                self.start_model_download(
+                    backend_id,
+                    ModelDownloadRequest {
+                        hf_token: request.hf_token,
+                        remember: request.remember,
+                    },
+                )
+                .await?;
+            }
+        }
+        if let Some(record) = self.modules.read().await.get(backend_id) {
+            if record.state == "installing" {
+                return self.module_status(backend_id).await;
+            }
+        }
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.modules.write().await.insert(
+            backend_id.into(),
+            ModuleInstallRecord {
+                operation_id: operation_id.clone(),
+                variant_id: variant.id.clone(),
+                state: "installing".into(),
+                error: String::new(),
+                cancel: cancel.clone(),
+            },
+        );
+        let modules = self.modules.clone();
+        let downloads = self.downloads.clone();
+        let control = self.control.clone();
+        let backend_key = backend_id.to_string();
+        let variant_id = variant.id.clone();
+        tokio::spawn(async move {
+            let result: Result<RuntimeProvisionStatus> = async {
+                if !bundled {
+                    loop {
+                        if cancel.load(Ordering::Acquire) {
+                            return Err(anyhow!("module installation cancelled"));
+                        }
+                        let download = downloads.read().await.get(&backend_key).cloned();
+                        match download.as_ref().map(|record| record.state.as_str()) {
+                            Some("installed") => break,
+                            Some("failed") => {
+                                return Err(anyhow!(
+                                    "model download failed: {}",
+                                    download
+                                        .as_ref()
+                                        .map(|record| record.error.as_str())
+                                        .unwrap_or_default()
+                                ));
+                            }
+                            Some("cancelled") => return Err(anyhow!("model download cancelled")),
+                            _ => tokio::time::sleep(Duration::from_millis(250)).await,
+                        }
+                    }
+                }
+                control.install(&variant_id).await
+            }
+            .await;
+            if cancel.load(Ordering::Acquire) && result.is_ok() {
+                let _ = control.remove(&variant_id).await;
+            }
+            let mut records = modules.write().await;
+            let Some(record) = records.get_mut(&backend_key) else {
+                return;
+            };
+            if record.operation_id != operation_id {
+                return;
+            }
+            if cancel.load(Ordering::Acquire) {
+                record.state = "cancelled".into();
+                record.error.clear();
+            } else if let Err(error) = result {
+                record.state = "failed".into();
+                record.error = format!("{error:#}");
+            } else {
+                record.state = "ready".into();
+                record.error.clear();
+            }
+        });
+        self.module_status(backend_id).await
+    }
+
+    pub async fn cancel_module_install(&self, backend_id: &str) -> Result<ModuleStatusResponse> {
+        let modules = self.modules.read().await;
+        let record = modules
+            .get(backend_id)
+            .ok_or_else(|| anyhow!("no module installation for '{backend_id}'"))?;
+        if record.state != "installing" {
+            return Err(anyhow!("module installation is not running"));
+        }
+        record.cancel.store(true, Ordering::Release);
+        drop(modules);
+        if let Some(download) = self.downloads.read().await.get(backend_id) {
+            download.cancel.store(true, Ordering::Release);
+        }
+        self.module_status(backend_id).await
+    }
+
+    pub async fn delete_module(&self, backend_id: &str) -> Result<ModuleStatusResponse> {
+        let backend = self
+            .catalog
+            .find(backend_id)
+            .cloned()
+            .ok_or_else(|| anyhow!("unknown backend id '{backend_id}'"))?;
+        let variant = resolve_variant(&backend, &self.hardware)
+            .cloned()
+            .ok_or_else(|| anyhow!("backend '{backend_id}' has no compatible variant"))?;
+        let active = self.state.read().await;
+        if [&active.asr, &active.tts, &active.llm]
+            .into_iter()
+            .flatten()
+            .any(|candidate| candidate.backend_id == backend_id)
+        {
+            return Err(anyhow!("active module cannot be removed"));
+        }
+        drop(active);
+        if !variant.container.is_empty() {
+            self.control.remove(&variant.id).await?;
+        }
+        if !variant_bundled(&backend, &variant) {
+            self.delete_model(backend_id).await?;
+        }
+        self.modules.write().await.remove(backend_id);
+        self.module_status(backend_id).await
     }
 
     pub async fn start_model_download(
@@ -1717,8 +2160,20 @@ impl LabController {
             tts_transition: state.tts_transition,
             llm_transition: state.llm_transition,
             ok: true,
+            error_code: String::new(),
             message: "ready".into(),
+            last_transition_error: state.last_transition_error,
         }
+    }
+
+    async fn restore_ready_state_after_failure(&self, snapshot: &ControllerState, message: &str) {
+        let mut restored = snapshot.clone();
+        restored.last_transition_error = message.to_string();
+        *self.state.write().await = restored;
+    }
+
+    async fn record_failed_rollback(&self, message: &str) {
+        self.state.write().await.last_transition_error = message.to_string();
     }
 
     pub(crate) fn tts_voice_mode(&self, tts_id: &str) -> Option<VoiceMode> {
@@ -1804,6 +2259,7 @@ impl LabController {
                     let mut status = self.status().await;
                     status.ok = false;
                     status.message = format!("TTS voice: {error:#}");
+                    status.error_code = activation_error_code(&status.message).into();
                     return status;
                 }
             }
@@ -1894,9 +2350,13 @@ impl LabController {
         }
 
         if !errors.is_empty() {
+            let message = errors.join("; ");
+            self.restore_ready_state_after_failure(&snapshot_state, &message)
+                .await;
             let mut status = self.status().await;
             status.ok = false;
-            status.message = errors.join("; ");
+            status.error_code = activation_error_code(&message).into();
+            status.message = message;
             return status;
         }
 
@@ -2023,12 +2483,24 @@ impl LabController {
             // Runtime was not cut over — stop any pre-started replacements so
             // we do not leave orphan stage containers running.
             self.abort_brought_up(&plans).await;
-            if let Err(error) = self.restore_containers(&snapshot_state).await {
+            let rollback_failed = if let Err(error) = self.restore_containers(&snapshot_state).await
+            {
                 errors.push(format!("rollback: {error:#}"));
+                true
+            } else {
+                false
+            };
+            let message = errors.join("; ");
+            if rollback_failed {
+                self.record_failed_rollback(&message).await;
+            } else {
+                self.restore_ready_state_after_failure(&snapshot_state, &message)
+                    .await;
             }
             let mut status = self.status().await;
             status.ok = false;
-            status.message = errors.join("; ");
+            status.error_code = activation_error_code(&message).into();
+            status.message = message;
             return status;
         }
 
@@ -2063,13 +2535,24 @@ impl LabController {
             )
             .await;
             *self.runtime.write().await = snapshot_runtime;
-            if let Err(error) = self.restore_containers(&snapshot_state).await {
+            let rollback_failed = if let Err(error) = self.restore_containers(&snapshot_state).await
+            {
                 errors.push(format!("rollback: {error:#}"));
+                true
+            } else {
+                false
+            };
+            let message = errors.join("; ");
+            if rollback_failed {
+                self.record_failed_rollback(&message).await;
+            } else {
+                self.restore_ready_state_after_failure(&snapshot_state, &message)
+                    .await;
             }
-            *self.state.write().await = snapshot_state;
             let mut status = self.status().await;
             status.ok = false;
-            status.message = errors.join("; ");
+            status.error_code = activation_error_code(&message).into();
+            status.message = message;
             return status;
         }
 
@@ -2083,6 +2566,7 @@ impl LabController {
         // Always publish a terminal "ready" for stages that are live so the UI
         // never stays on preparing/draining after a no-op or voice-only call.
         self.emit_active_stages_ready().await;
+        self.state.write().await.last_transition_error.clear();
 
         let mut status = self.status().await;
         status.message = if has_switch {
@@ -2137,9 +2621,36 @@ impl LabController {
         let variant = resolve_variant(backend, &self.hardware).ok_or_else(|| {
             anyhow!("backend '{backend_id}' has no compatible certified variant for this host")
         })?;
-        if self.docker_control_enabled && !variant.container.is_empty() {
+        if !variant.host_profile.is_empty() {
+            return Err(anyhow!(
+                "host_module_delivery_pending: managed Windows host-module delivery is not installed"
+            ));
+        }
+        if !variant.container.is_empty() {
+            if !self.docker_control_enabled {
+                return Err(anyhow!(
+                    "module_not_provisioned: managed Speech Lab controller is unavailable"
+                ));
+            }
+            let runtime = self.control.runtime_status(&variant.id).await?;
+            if !matches!(runtime.state.as_str(), "ready" | "running") {
+                return Err(anyhow!(
+                    "module_not_provisioned: runtime '{}' is {}",
+                    variant.id,
+                    runtime.state
+                ));
+            }
             self.control
-                .validate(&variant.container, stage, &backend.id, &variant.image)
+                .validate(
+                    &variant.container,
+                    stage,
+                    &backend.id,
+                    if runtime.image.is_empty() {
+                        &variant.image
+                    } else {
+                        &runtime.image
+                    },
+                )
                 .await?;
         }
         self.emit_transition(
@@ -2237,14 +2748,76 @@ impl LabController {
 
     fn stage_endpoint(&self, backend: &BackendDefinition, variant: &BackendVariant) -> String {
         if backend.id == "external-openai" {
-            return std::env::var("S2S_LLM_EXTERNAL_URL").unwrap_or_else(|_| {
-                self.runtime
-                    .try_read()
-                    .map(|rt| rt.cfg.llm_base_url.clone())
-                    .unwrap_or_default()
-            });
+            if let Ok(url) = std::env::var("S2S_LLM_EXTERNAL_URL") {
+                if !url.trim().is_empty() {
+                    return url;
+                }
+            }
+            return self
+                .runtime
+                .try_read()
+                .ok()
+                .filter(|rt| rt.llm_id == "external-openai")
+                .map(|rt| rt.cfg.llm_base_url.clone())
+                .unwrap_or_default();
         }
         endpoint_for(variant, self.hardware.in_container)
+    }
+
+    async fn remote_runtime_status(
+        &self,
+        backend: &BackendDefinition,
+        variant: &BackendVariant,
+        endpoint: &str,
+    ) -> (String, String) {
+        if endpoint.trim().is_empty() {
+            return (
+                "needs_configuration".into(),
+                "remote endpoint is not configured".into(),
+            );
+        }
+        let api_key = if backend.id == "external-openai" {
+            self.runtime.read().await.cfg.llm_api_key.clone()
+        } else {
+            String::new()
+        };
+        let requires_auth = backend.id == "external-openai"
+            && std::env::var("S2S_LLM_EXTERNAL_REQUIRES_AUTH")
+                .ok()
+                .map(|value| !matches!(value.trim(), "0" | "false" | "no"))
+                .unwrap_or_else(|| endpoint.trim().starts_with("https://"));
+        if requires_auth && api_key.trim().is_empty() {
+            return (
+                "needs_credentials".into(),
+                "required remote credentials are not configured".into(),
+            );
+        }
+        let base = endpoint
+            .split("/v1/")
+            .next()
+            .unwrap_or(endpoint)
+            .trim_end_matches('/');
+        let path = if variant.health_path.is_empty() {
+            "/"
+        } else {
+            variant.health_path.as_str()
+        };
+        let url = format!("{base}{path}");
+        let mut request = self.client.get(&url).timeout(Duration::from_secs(2));
+        if !api_key.trim().is_empty() {
+            request = request.bearer_auth(api_key);
+        }
+        match request.send().await {
+            Ok(response) if response.status().is_success() => ("external".into(), String::new()),
+            Ok(response) => (
+                "unhealthy".into(),
+                format!("remote healthcheck returned HTTP {}", response.status()),
+            ),
+            Err(error) => (
+                "unhealthy".into(),
+                format!("remote healthcheck failed: {error}"),
+            ),
+        }
     }
 
     fn current_stage_endpoint(
@@ -4020,6 +4593,7 @@ mod tests {
         running: Mutex<HashSet<String>>,
         actions: Mutex<Vec<String>>,
         fail_start: Mutex<HashSet<String>>,
+        missing_variants: Mutex<HashSet<String>>,
     }
 
     #[async_trait]
@@ -4055,6 +4629,18 @@ mod tests {
 
         async fn list_managed_running(&self) -> Result<Vec<String>> {
             Ok(self.running.lock().await.iter().cloned().collect())
+        }
+
+        async fn runtime_status(&self, variant_id: &str) -> Result<RuntimeProvisionStatus> {
+            Ok(RuntimeProvisionStatus {
+                state: if self.missing_variants.lock().await.contains(variant_id) {
+                    "missing"
+                } else {
+                    "ready"
+                }
+                .into(),
+                ..RuntimeProvisionStatus::default()
+            })
         }
     }
 
@@ -4094,11 +4680,14 @@ mod tests {
                     vendors: vec!["any".into()],
                     platforms: vec![std::env::consts::OS.into()],
                     stable: true,
+                    published: true,
+                    runtime_delivery_reason: String::new(),
                     device_match: vec![],
                     endpoint: endpoint.clone(),
                     native_endpoint: endpoint,
                     container: "asr-a".into(),
                     image: "test/asr:a".into(),
+                    image_download_size_bytes: 0,
                     health_path: "/health".into(),
                     environment: BTreeMap::new(),
                     artifacts: Vec::new(),
@@ -4143,11 +4732,14 @@ mod tests {
                 vendors: vec!["any".into()],
                 platforms: vec![std::env::consts::OS.into()],
                 stable: true,
+                published: true,
+                runtime_delivery_reason: String::new(),
                 device_match: vec![],
                 endpoint: String::new(),
                 native_endpoint: String::new(),
                 container: container.into(),
                 image: format!("test/{id}:latest"),
+                image_download_size_bytes: 0,
                 health_path: "/health".into(),
                 environment: BTreeMap::new(),
                 artifacts: Vec::new(),
@@ -4748,7 +5340,57 @@ mod tests {
             .await;
 
         assert!(!result.ok);
+        assert!(!result.last_transition_error.is_empty());
         assert_eq!(runtime.read().await.asr_id, "asr-a");
+        assert!(stage_is_ready(
+            result.asr.as_ref(),
+            &result.asr_transition,
+            "asr-a"
+        ));
+        assert_eq!(
+            control.running.lock().await.clone(),
+            HashSet::from(["asr-a".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_module_preflight_preserves_ready_stack() {
+        let runtime = runtime::runtime_from(test_config());
+        runtime.write().await.asr_id = "asr-a".into();
+        let control = Arc::new(FakeControl::default());
+        control.running.lock().await.insert("asr-a".into());
+        control
+            .missing_variants
+            .lock()
+            .await
+            .insert("asr-b-cpu".into());
+        let lab = LabController::with_control(
+            switch_catalog(),
+            cpu_hardware(),
+            runtime,
+            control.clone(),
+            true,
+        )
+        .unwrap();
+        lab.reconcile_active_stack().await;
+
+        let result = lab
+            .activate(ActivateStackRequest {
+                asr_id: Some("asr-b".into()),
+                ..ActivateStackRequest::default()
+            })
+            .await;
+
+        assert!(!result.ok);
+        assert_eq!(result.error_code, "module_not_provisioned");
+        assert!(result
+            .last_transition_error
+            .contains("module_not_provisioned"));
+        assert!(stage_is_ready(
+            result.asr.as_ref(),
+            &result.asr_transition,
+            "asr-a"
+        ));
         assert_eq!(
             control.running.lock().await.clone(),
             HashSet::from(["asr-a".to_string()])
@@ -4875,11 +5517,14 @@ mod tests {
                 vendors: vec!["any".into()],
                 platforms: vec![std::env::consts::OS.into()],
                 stable: true,
+                published: true,
+                runtime_delivery_reason: String::new(),
                 device_match: vec![],
                 endpoint: "http://host.docker.internal:8089/v1/audio/speech".into(),
                 native_endpoint: "http://127.0.0.1:8089/v1/audio/speech".into(),
                 container: String::new(),
                 image: String::new(),
+                image_download_size_bytes: 0,
                 health_path: "/health".into(),
                 environment: BTreeMap::new(),
                 artifacts: Vec::new(),

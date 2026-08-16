@@ -37,6 +37,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Validate bundle-v2 catalog matrix
+        run: |
+          python s2s-vulkan/scripts/speech_lab_bundle.py
+          cd s2s-vulkan/controller
+          go test ./...
+
       - name: Image name (lowercase)
         id: image
         run: |
@@ -98,10 +104,35 @@ jobs:
         run: |
           set -euo pipefail
           owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
-          docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push -t "ghcr.io/$owner/s2s-whisper-fw:$TAG" -f s2s-vulkan/docker/Dockerfile.whisper s2s-vulkan
-          docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push -t "ghcr.io/$owner/s2s-llama-granite:$TAG" -f s2s-vulkan/docker/Dockerfile.llama s2s-vulkan
-          docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push -t "ghcr.io/$owner/s2s-model-init:$TAG" -f s2s-vulkan/docker/Dockerfile.backend-init s2s-vulkan
-          docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push -t "ghcr.io/$owner/s2s-web:$TAG" -f s2s-vulkan/web/Dockerfile s2s-vulkan/web
+          build() {
+            repository="$1"; dockerfile="$2"; shift 2
+            docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push \
+              -t "ghcr.io/$owner/$repository:$TAG" -f "$dockerfile" "$@" s2s-vulkan
+          }
+          build s2s-speech-lab-controller s2s-vulkan/docker/Dockerfile.controller
+          build s2s-whisper-fw s2s-vulkan/docker/Dockerfile.whisper
+          build s2s-asr-parakeet-cpu s2s-vulkan/docker/Dockerfile.parakeet
+          build s2s-asr-parakeet-cuda s2s-vulkan/docker/Dockerfile.parakeet \
+            --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+          build s2s-asr-voxtral-cpu s2s-vulkan/docker/Dockerfile.voxtral
+          build s2s-asr-voxtral-cuda s2s-vulkan/docker/Dockerfile.voxtral \
+            --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+          build s2s-tts-qwen-sycl-aot s2s-vulkan/docker/Dockerfile.tts-sycl \
+            --build-arg SYCL_DEVICE_ARCH=intel_gpu_bmg_g21
+          build s2s-tts-qwen-sycl-jit s2s-vulkan/docker/Dockerfile.tts-sycl
+          build s2s-tts-qwen-vulkan s2s-vulkan/docker/Dockerfile.tts
+          build s2s-tts-qwen-cuda s2s-vulkan/docker/Dockerfile.tts
+          build s2s-tts-kokoro s2s-vulkan/docker/Dockerfile.kokoro
+          build s2s-tts-vibevoice-cpu s2s-vulkan/docker/Dockerfile.vibevoice
+          build s2s-tts-vibevoice-cuda s2s-vulkan/docker/Dockerfile.vibevoice \
+            --build-arg CRISPASR_IMAGE=ghcr.io/crispstrobe/crispasr:main-cuda
+          build s2s-tts-higgs-cuda s2s-vulkan/docker/Dockerfile.higgs
+          build s2s-llama-granite s2s-vulkan/docker/Dockerfile.llama
+          build s2s-llama-granite-cuda s2s-vulkan/docker/Dockerfile.llama \
+            --build-arg LLAMA_BASE_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
+          build s2s-model-init s2s-vulkan/docker/Dockerfile.backend-init
+          docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push \
+            -t "ghcr.io/$owner/s2s-web:$TAG" -f s2s-vulkan/web/Dockerfile s2s-vulkan/web
 
       - name: Publish bundle manifest
         if: github.event_name != 'pull_request'
@@ -110,40 +141,56 @@ jobs:
           SHA: ${{ github.sha }}
           TAG: sha-${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
+          MANIFEST_SIGNING_KEY_B64: ${{ secrets.SPEECH_LAB_MANIFEST_ED25519_PRIVATE_KEY_B64 }}
         run: |
           set -euo pipefail
           owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
           digest() { docker buildx imagetools inspect "ghcr.io/$owner/$1:$TAG" --format '{{json .Manifest.Digest}}' | tr -d '"'; }
           gateway_tag="${GITHUB_REF_NAME#v}"
           gateway=$(docker buildx imagetools inspect "ghcr.io/$owner/s2s-vulkan:${gateway_tag}" --format '{{json .Manifest.Digest}}' | tr -d '"')
-          asr=$(digest s2s-whisper-fw)
-          llm=$(digest s2s-llama-granite)
-          web=$(digest s2s-web)
-          init=$(digest s2s-model-init)
-          python - "$gateway" "$asr" "$llm" "$web" "$init" <<'PY'
+          export GATEWAY_DIGEST="$gateway"
+          python - <<'PY'
           import json, os, sys
           with open(os.environ["BUNDLE_PATH"], encoding="utf-8") as fh:
               bundle = json.load(fh)
           owner = os.environ["OWNER"].lower()
           version = os.environ.get("GITHUB_REF_NAME") or ("sha-" + os.environ["SHA"][:12])
-          names = ["s2s-vulkan", "s2s-whisper-fw", "s2s-llama-granite", "s2s-web", "s2s-model-init"]
-          digests = dict(zip(names, sys.argv[1:]))
-          image = lambda name: f"ghcr.io/{owner}/{name}@{digests[name]}"
+          repositories = {key: value.split("/", 2)[-1].split("@", 1)[0] for key, value in bundle["images"].items()}
+          digests = {"gateway": os.environ["GATEWAY_DIGEST"]}
+          import subprocess
+          for key, repository in repositories.items():
+              if repository == repositories["gateway"]:
+                  digests[key] = os.environ["GATEWAY_DIGEST"]
+                  continue
+              ref = f"ghcr.io/{owner}/{repository}:{os.environ['TAG']}"
+              digests[key] = subprocess.check_output(
+                  ["docker", "buildx", "imagetools", "inspect", ref, "--format", "{{json .Manifest.Digest}}"],
+                  text=True,
+              ).strip().strip('"')
+          images = {key: f"ghcr.io/{owner}/{repositories[key]}@{digest}" for key, digest in digests.items()}
           bundle["publisher"] = f"ghcr.io/{owner}"
           bundle["bundle_version"] = version
-          bundle["images"] = {
-              "gateway": image("s2s-vulkan"), "asr": image("s2s-whisper-fw"),
-              "tts": image("s2s-vulkan"), "llm": image("s2s-llama-granite"),
-              "web": image("s2s-web"), "model_init": image("s2s-model-init")
-          }
+          bundle["images"] = images
+          for runtime in bundle["runtimes"]:
+              runtime["image"] = images[runtime["image_key"]]
           with open("speech-lab-bundle.json", "w", encoding="utf-8") as fh:
               json.dump(bundle, fh, indent=2)
               fh.write("\n")
           PY
           sha256sum speech-lab-bundle.json > speech-lab-bundle.json.sha256
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            test -n "$MANIFEST_SIGNING_KEY_B64" || { echo "SPEECH_LAB_MANIFEST_ED25519_PRIVATE_KEY_B64 is required for release tags" >&2; exit 1; }
+            umask 077
+            printf '%s' "$MANIFEST_SIGNING_KEY_B64" | base64 --decode > speech-lab-manifest-signing-key.pem
+            trap 'rm -f speech-lab-manifest-signing-key.pem' EXIT
+            key_description=$(openssl pkey -in speech-lab-manifest-signing-key.pem -text_pub -noout 2>&1)
+            [[ "$key_description" == *"ED25519"* ]] || { echo "Speech Lab manifest signing key is not Ed25519" >&2; exit 1; }
+            openssl pkeyutl -sign -rawin -inkey speech-lab-manifest-signing-key.pem \
+              -in speech-lab-bundle.json -out speech-lab-bundle.json.sig
+            rm -f speech-lab-manifest-signing-key.pem
+            [[ "$(wc -c < speech-lab-bundle.json.sig)" -eq 64 ]] || { echo "Speech Lab manifest signature has an invalid size" >&2; exit 1; }
             gh release create "${GITHUB_REF_NAME}" --generate-notes || true
-            gh release upload "${GITHUB_REF_NAME}" speech-lab-bundle.json speech-lab-bundle.json.sha256 --clobber
+            gh release upload "${GITHUB_REF_NAME}" speech-lab-bundle.json speech-lab-bundle.json.sha256 speech-lab-bundle.json.sig --clobber
           fi
 
       - name: Summary

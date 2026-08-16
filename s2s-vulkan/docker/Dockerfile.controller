@@ -1,0 +1,12 @@
+FROM golang:1.24-alpine AS build
+WORKDIR /src
+COPY controller/go.mod ./
+COPY controller/main.go ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/speech-lab-controller .
+
+FROM scratch
+COPY --from=build /out/speech-lab-controller /speech-lab-controller
+# The Docker socket and controller token volume are root-owned on standard
+# installations. The process is intentionally tiny, policy-only, and the
+# deployment drops every Linux capability with no-new-privileges enabled.
+ENTRYPOINT ["/speech-lab-controller"]

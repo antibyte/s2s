@@ -483,6 +483,8 @@ mod tests {
                 variants: vec![],
             },
             available,
+            compatible: available,
+            activatable: available && installed,
             reason: String::new(),
             selected_variant: available.then(|| BackendVariant {
                 id: format!("{id}-cpu"),
@@ -490,11 +492,14 @@ mod tests {
                 vendors: vec!["any".into()],
                 platforms: vec!["linux".into()],
                 stable,
+                published: true,
+                runtime_delivery_reason: String::new(),
                 device_match: vec![],
                 endpoint: format!("http://{id}"),
                 native_endpoint: String::new(),
                 container: String::new(),
                 image: String::new(),
+                image_download_size_bytes: 0,
                 health_path: "/health".into(),
                 environment: Default::default(),
                 artifacts: vec![],
@@ -506,6 +511,7 @@ mod tests {
                     String::new()
                 },
             }),
+            variant_id: available.then(|| format!("{id}-cpu")).unwrap_or_default(),
             installed,
             download_state: if installed {
                 "installed".into()
@@ -519,6 +525,7 @@ mod tests {
             host_managed,
             runtime_state: runtime.into(),
             runtime_reason: String::new(),
+            image_download_size_bytes: 0,
             auth_required: false,
             hf_token_configured: false,
         }
