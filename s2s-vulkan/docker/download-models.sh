@@ -42,9 +42,26 @@ warn() { echo "[models] WARN: $*" >&2; }
 die()  { echo "[models] ERROR: $*" >&2; exit 1; }
 
 MODELS_DIR="${S2S_MODELS_DIR:-/models}"
+DATA_DIR="${S2S_DATA_DIR:-/data}"
 FORCE="${S2S_DOWNLOAD_FORCE:-0}"
 MODE="${S2S_DOWNLOAD_MODELS:-auto}"
 HF_TOKEN="${S2S_HF_TOKEN:-${HF_TOKEN:-}}"
+
+finalize_runtime_permissions() {
+  if [[ "$(id -u)" -ne 0 ]]; then
+    return
+  fi
+  local runtime_uid="${S2S_RUNTIME_UID:-10001}"
+  local runtime_gid="${S2S_RUNTIME_GID:-10001}"
+  local dir
+  for dir in "$MODELS_DIR" "$DATA_DIR"; do
+    if [[ -d "$dir" ]]; then
+      chown -R "$runtime_uid:$runtime_gid" "$dir"
+    fi
+  done
+}
+
+trap finalize_runtime_permissions EXIT
 
 is_true() {
   case "${1:-}" in
