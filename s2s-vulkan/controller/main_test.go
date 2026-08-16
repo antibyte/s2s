@@ -166,6 +166,41 @@ func TestInstallCreatesOnlyPolicyRuntime(t *testing.T) {
 	}
 }
 
+func TestInstallReusesExactImmutableImage(t *testing.T) {
+	var pulled bool
+	docker := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/containers/s2s-parakeet-cpu/json"):
+			http.NotFound(w, r)
+		case strings.Contains(r.URL.Path, "/images/") && strings.HasSuffix(r.URL.Path, "/json"):
+			_, _ = w.Write([]byte(`{"Id":"sha256:present"}`))
+		case strings.HasSuffix(r.URL.Path, "/images/create"):
+			pulled = true
+			w.WriteHeader(http.StatusOK)
+		case strings.HasSuffix(r.URL.Path, "/containers/create"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"Id":"created"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	c := testController(t, docker)
+	server := httptest.NewServer(c.routes())
+	defer server.Close()
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/s2s/modules/parakeet-cpu/install", nil)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("install status = %d", resp.StatusCode)
+	}
+	if pulled {
+		t.Fatal("already-present immutable image was pulled again")
+	}
+}
+
 func TestRuntimePolicyRequiresDigestAndKnownStage(t *testing.T) {
 	base := runtimePolicy{BackendID: "b", VariantID: "v", Stage: "asr", Container: "c", Image: "repo@sha256:" + strings.Repeat("a", 64), Architectures: []string{goruntime.GOARCH}, Healthcheck: healthcheckPolicy{Path: "/health", Port: 8082}}
 	if err := validateRuntimePolicy(base); err != nil {

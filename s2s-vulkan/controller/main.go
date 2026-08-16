@@ -553,12 +553,18 @@ func (c *controller) ensureModule(ctx context.Context, runtime runtimePolicy) er
 			return fmt.Errorf("remove stale runtime container: %s: %w", strings.TrimSpace(string(body)), err)
 		}
 	}
-	status, body, err := c.dockerRequest(ctx, http.MethodPost, "/images/create?fromImage="+url.QueryEscape(runtime.Image), nil)
+	available, err := c.imageAvailable(ctx, runtime.Image)
 	if err != nil {
-		return fmt.Errorf("pull runtime image: %w", err)
+		return err
 	}
-	if status < 200 || status >= 300 {
-		return fmt.Errorf("pull runtime image returned HTTP %d: %s", status, strings.TrimSpace(string(body)))
+	if !available {
+		status, body, err := c.dockerRequest(ctx, http.MethodPost, "/images/create?fromImage="+url.QueryEscape(runtime.Image), nil)
+		if err != nil {
+			return fmt.Errorf("pull runtime image: %w", err)
+		}
+		if status < 200 || status >= 300 {
+			return fmt.Errorf("pull runtime image returned HTTP %d: %s", status, strings.TrimSpace(string(body)))
+		}
 	}
 	env := make([]string, 0, len(runtime.Environment))
 	keys := make([]string, 0, len(runtime.Environment))
@@ -630,7 +636,7 @@ func (c *controller) ensureModule(ctx context.Context, runtime runtimePolicy) er
 		"NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{c.network: map[string]any{"Aliases": aliases}}},
 	}
 	bodyJSON, _ := json.Marshal(bodyMap)
-	status, body, err = c.dockerRequest(ctx, http.MethodPost, "/containers/create?name="+url.QueryEscape(runtime.Container), bodyJSON)
+	status, body, err := c.dockerRequest(ctx, http.MethodPost, "/containers/create?name="+url.QueryEscape(runtime.Container), bodyJSON)
 	if err != nil {
 		return fmt.Errorf("create runtime container: %w", err)
 	}
@@ -638,6 +644,21 @@ func (c *controller) ensureModule(ctx context.Context, runtime runtimePolicy) er
 		return fmt.Errorf("create runtime container returned HTTP %d: %s", status, strings.TrimSpace(string(body)))
 	}
 	return nil
+}
+
+func (c *controller) imageAvailable(ctx context.Context, image string) (bool, error) {
+	status, body, err := c.dockerRequest(ctx, http.MethodGet, "/images/"+url.PathEscape(image)+"/json", nil)
+	if err != nil {
+		return false, fmt.Errorf("inspect runtime image: %w", err)
+	}
+	switch status {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, fmt.Errorf("inspect runtime image returned HTTP %d: %s", status, strings.TrimSpace(string(body)))
+	}
 }
 
 func (c *controller) inspectOwned(ctx context.Context, name string) (dockerInspect, bool, error) {
