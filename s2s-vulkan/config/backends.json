@@ -3057,7 +3057,7 @@
         {
           "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/codec.pth?download=true",
           "path": "audio8-tts-preview-0.6b/codec.pth",
-          "size": 134985755
+          "size": 1349857559
         },
         {
           "source": "https://huggingface.co/Audio8/Audio8-TTS-Preview-0.6b/resolve/f9612f13a0ab40facf3d050fc908b9e6db05c2be/config.json?download=true",
@@ -3145,7 +3145,7 @@
           "platforms": [
             "windows"
           ],
-          "stable": false,
+          "stable": true,
           "endpoint": "http://host.docker.internal:8096/v1/audio/speech",
           "native_endpoint": "http://127.0.0.1:8096/v1/audio/speech",
           "container": "",

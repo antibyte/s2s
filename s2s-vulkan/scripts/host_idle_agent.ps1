@@ -73,6 +73,7 @@ $Script:LogDir = Join-Path $Script:AgentDir "logs"
 $Script:StatusPath = Join-Path $Script:AgentDir "status.json"
 $Script:StatePath = Join-Path $Script:AgentDir "owned-processes.json"
 $Script:Owned = @{}
+$Script:VulkanStatusCache = $null
 
 foreach ($path in @(
     $Script:DataDir,
@@ -330,10 +331,27 @@ function Write-JsonAtomic {
     $temp = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
     try {
         [IO.File]::WriteAllText($temp, $json, [Text.UTF8Encoding]::new($false))
-        # Move-Item -Force cannot replace an existing file reliably on Windows.
-        # PowerShell 7 runs on modern .NET, whose overwrite overload keeps the
-        # same-volume replacement atomic for readers of the status/result file.
-        [IO.File]::Move($temp, $Path, $true)
+        # Prefer atomic replace when available (PowerShell 7 / modern .NET).
+        # Windows PowerShell 5 only has the 2-argument Move overload.
+        $moved = $false
+        try {
+            [IO.File]::Move($temp, $Path, $true)
+            $moved = $true
+        } catch [System.MissingMethodException] {
+            $moved = $false
+        } catch {
+            # Some hosts surface the missing overload as MethodInvocationException.
+            if ($_.Exception.Message -notmatch 'Move|Überladung|overload|arguments') {
+                throw
+            }
+            $moved = $false
+        }
+        if (-not $moved) {
+            if (Test-Path -LiteralPath $Path) {
+                Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+            }
+            [IO.File]::Move($temp, $Path)
+        }
     }
     finally {
         Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
@@ -361,28 +379,68 @@ function Resolve-ModelPath {
 }
 
 function Get-VulkanStatus {
+    # vulkaninfo can hang on some Windows GPU stacks; never block the heartbeat
+    # loop longer than a few seconds, and cache successful probes.
+    $cacheSecs = 30
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if (
+        $Script:VulkanStatusCache -and
+        ($now - [int]$Script:VulkanStatusCache.cached_at) -lt $cacheSecs
+    ) {
+        return $Script:VulkanStatusCache.status
+    }
+
     $forcedName = $env:S2S_HOST_VULKAN_DEVICE_NAME
     $assumeVulkan = $env:S2S_HOST_ASSUME_VULKAN -eq "1"
+    $fallback = [pscustomobject]@{
+        available = $assumeVulkan
+        device_name = if ($forcedName) { $forcedName } else { "" }
+        device_index = $Script:ResolvedVulkanDevice
+    }
+
     $vulkanInfo = Get-Command "vulkaninfo.exe" -ErrorAction SilentlyContinue
     if (-not $vulkanInfo) {
         $vulkanInfo = Get-Command "vulkaninfo" -ErrorAction SilentlyContinue
     }
     if (-not $vulkanInfo) {
-        return [pscustomobject]@{
-            available = $assumeVulkan
-            device_name = if ($forcedName) { $forcedName } else { "" }
-            device_index = $Script:ResolvedVulkanDevice
-        }
+        $Script:VulkanStatusCache = @{ cached_at = $now; status = $fallback }
+        return $fallback
     }
 
-    $output = & $vulkanInfo.Source --summary 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) {
-        return [pscustomobject]@{
-            available = $assumeVulkan
-            device_name = if ($forcedName) { $forcedName } else { "" }
-            device_index = $Script:ResolvedVulkanDevice
+    $output = ""
+    $exitCode = 1
+    $probe = $null
+    try {
+        $probe = Start-Process -FilePath $vulkanInfo.Source -ArgumentList @("--summary") `
+            -NoNewWindow -PassThru -RedirectStandardOutput "$env:TEMP\s2s-vulkaninfo.out.txt" `
+            -RedirectStandardError "$env:TEMP\s2s-vulkaninfo.err.txt"
+        if (-not $probe.WaitForExit(5000)) {
+            try { Stop-Process -Id $probe.Id -Force -ErrorAction SilentlyContinue } catch {}
+            Write-Warning "vulkaninfo --summary timed out after 5s; reusing cached/fallback device info"
+            if ($Script:VulkanStatusCache) {
+                return $Script:VulkanStatusCache.status
+            }
+            $Script:VulkanStatusCache = @{ cached_at = $now; status = $fallback }
+            return $fallback
         }
+        $exitCode = $probe.ExitCode
+        if (Test-Path -LiteralPath "$env:TEMP\s2s-vulkaninfo.out.txt") {
+            $output = Get-Content -LiteralPath "$env:TEMP\s2s-vulkaninfo.out.txt" -Raw -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-Warning "vulkaninfo probe failed: $($_.Exception.Message)"
+        if ($Script:VulkanStatusCache) {
+            return $Script:VulkanStatusCache.status
+        }
+        $Script:VulkanStatusCache = @{ cached_at = $now; status = $fallback }
+        return $fallback
     }
+
+    if ($exitCode -ne 0 -or [string]::IsNullOrWhiteSpace($output)) {
+        $Script:VulkanStatusCache = @{ cached_at = $now; status = $fallback }
+        return $fallback
+    }
+
     $devices = @()
     $currentDevice = $null
     foreach ($line in ($output -split "\r?\n")) {
@@ -429,11 +487,13 @@ function Get-VulkanStatus {
     } else {
         "Vulkan device $($Script:ResolvedVulkanDevice)"
     }
-    return [pscustomobject]@{
+    $status = [pscustomobject]@{
         available = $true
         device_name = $deviceName
         device_index = $Script:ResolvedVulkanDevice
     }
+    $Script:VulkanStatusCache = @{ cached_at = $now; status = $status }
+    return $status
 }
 
 function Get-ProcessExecutable {
@@ -1230,12 +1290,19 @@ function Update-OwnedProcesses {
 function Write-Heartbeat {
     $vulkan = Get-VulkanStatus
     $availableProfiles = @()
-    if ($vulkan.available) {
-        foreach ($profile in $Script:Profiles.Values) {
-            if (Test-Path -LiteralPath $profile.executable -PathType Leaf) {
-                $availableProfiles += [string]$profile.name
-            }
+    # Advertise any profile whose executable exists. Vulkan-only tools still
+    # fail closed at start when the device is missing; CPU Python TTS must
+    # remain visible without a working vulkaninfo probe.
+    foreach ($profile in $Script:Profiles.Values) {
+        if (-not (Test-Path -LiteralPath $profile.executable -PathType Leaf)) {
+            continue
         }
+        $name = [string]$profile.name
+        $needsVulkan = $name -match '^(crispasr-|supertonic-webgpu|qwen-sycl|llama-granite|xtts-webgpu)'
+        if ($needsVulkan -and -not $vulkan.available) {
+            continue
+        }
+        $availableProfiles += $name
     }
     $processes = foreach ($entry in $Script:Owned.Values) {
         [ordered]@{

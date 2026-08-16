@@ -1686,7 +1686,7 @@ mod tests {
     }
 
     #[test]
-    fn audio8_tts_catalog_is_windows_host_experimental() {
+    fn audio8_tts_catalog_supports_stable_windows_cpu() {
         let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
         let backend = catalog
             .find("audio8-tts-preview-0.6b")
@@ -1706,21 +1706,24 @@ mod tests {
         }));
         assert!(is_known_host_profile("audio8-python"));
 
+        // CPU host path is stable so downloads work without experimental opt-in.
         let mut windows = hw("any", &["cpu"]);
         windows.platform = "windows".into();
-        windows.allow_experimental = true;
+        windows.allow_experimental = false;
         let cpu = resolve_variant(backend, &windows).expect("Windows CPU variant");
         assert_eq!(cpu.id, "audio8-tts-preview-0.6b-host-cpu");
         assert_eq!(cpu.host_profile, "audio8-python");
         assert!(cpu.endpoint.contains("8096"));
-        assert!(!cpu.stable);
+        assert!(cpu.stable);
 
+        // CUDA remains experimental and ranks above CPU when allowed.
         let mut nvidia = hw("nvidia", &["cuda", "cpu"]);
         nvidia.platform = "windows".into();
         nvidia.allow_experimental = true;
         let cuda = resolve_variant(backend, &nvidia).expect("Windows CUDA variant");
         assert_eq!(cuda.id, "audio8-tts-preview-0.6b-host-cuda");
         assert_eq!(cuda.host_profile, "audio8-python");
+        assert!(!cuda.stable);
 
         let linux = hw("any", &["cpu"]);
         assert!(resolve_variant(backend, &linux).is_none());
