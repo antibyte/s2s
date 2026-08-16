@@ -2889,5 +2889,5 @@ if (localStorage.getItem("s2s.labOpen") === "1" && window.innerWidth > 900) {
 }
 
 maybeShowCoach();
-log("s2s lab ready — Talk first, Lab second");
+log("AuraGo S2S lab ready — Talk first, Lab second");
 refreshUi();
