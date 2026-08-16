@@ -1,6 +1,6 @@
 # Handoff pointer: AuraGo × s2s Speech Lab (for Codex)
 
-**Date:** 2026-08-01  
+**Date:** 2026-08-01
 **Audience:** Codex working on **AuraGo** (not re-implementing s2s).
 
 ## Primary handoff (AuraGo repo)
