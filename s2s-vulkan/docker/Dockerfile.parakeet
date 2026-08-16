@@ -6,7 +6,8 @@ ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1
+    TRANSFORMERS_OFFLINE=1 \
+    NUMBA_CACHE_DIR=/tmp/numba
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libsndfile1 \
