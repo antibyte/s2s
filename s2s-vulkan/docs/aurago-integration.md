@@ -36,7 +36,12 @@ No matrix benchmarks are required on the happy path.
 | `GET` | `/health` | Process liveness |
 
 The published `speech-lab-bundle.json` is available as a GitHub release asset
-alongside a detached SHA-256 checksum.
+alongside a detached raw Ed25519 signature (`speech-lab-bundle.json.sig`) and a
+SHA-256 checksum. Release tags fail closed unless the repository Actions secret
+`SPEECH_LAB_MANIFEST_ED25519_PRIVATE_KEY_B64` contains a base64-encoded Ed25519
+private key in PEM format. The matching public key must be pinned in AuraGo
+before that signed release can be consumed; the checksum is only a
+transport-integrity aid and is not an authenticity proof.
 It contains only immutable `ghcr.io/antibyte/*@sha256:…` references. AuraGo
 accepts that publisher and digest format only; it never executes an arbitrary
 Compose file. The managed profile uses the stable bundled ASR/TTS/LLM images
