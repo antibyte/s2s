@@ -36,6 +36,12 @@ RUN git -C /src/qwentts.cpp apply --check /tmp/0101-qwentts-rebased.patch \
 WORKDIR /src/qwentts.cpp
 RUN export SETVARS_ARGS="--force" && \
     . /opt/intel/oneapi/setvars.sh && \
+    compiler_bin="$(dirname "$(find /opt/intel/oneapi/compiler -type f -name llvm-foreach -print -quit)")" && \
+    ocloc_bin="$(dirname "$(find /opt/intel/oneapi -type f -name ocloc -print -quit)")" && \
+    test -x "${compiler_bin}/llvm-foreach" && \
+    test -x "${ocloc_bin}/ocloc" && \
+    export PATH="${compiler_bin}:${ocloc_bin}:${PATH}" && \
+    export LD_LIBRARY_PATH="${ocloc_bin}:${LD_LIBRARY_PATH:-}" && \
     arch_arg="" && \
     if [ -n "${SYCL_DEVICE_ARCH}" ]; then arch_arg="-DGGML_SYCL_DEVICE_ARCH=${SYCL_DEVICE_ARCH}"; fi && \
     cmake -S . -B build -G Ninja \
