@@ -13,6 +13,7 @@
 FROM intel/oneapi:2026.1.0-devel-ubuntu24.04 AS builder
 
 ARG SYCL_DEVICE_ARCH=
+ARG BUILD_JOBS=4
 ARG QWENTTS_REV=82cd05b9f3a175612dc89fd6943e610fab096ef5
 ARG GGML_REV=c044c6f03892f9d5e98213b05f8afea1f8b0d3c9
 
@@ -53,7 +54,7 @@ RUN export SETVARS_ARGS="--force" && \
       -DCMAKE_C_COMPILER=icx \
       -DCMAKE_CXX_COMPILER=icx \
       ${arch_arg} && \
-    cmake --build build -j"$(nproc)"
+    cmake --build build -j"${BUILD_JOBS}"
 
 FROM intel/oneapi-runtime:2026.0.0-devel-ubuntu24.04 AS runtime
 
