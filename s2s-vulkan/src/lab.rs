@@ -1624,7 +1624,7 @@ impl LabController {
             return Err(anyhow!("managed Speech Lab controller is unavailable"));
         }
         let bundled = variant_bundled(backend, variant);
-        if !bundled {
+        let model_ready = if !bundled {
             let (installed, downloaded) = model_installation_state(backend, variant).await?;
             if !installed {
                 let _ = downloaded;
@@ -1637,7 +1637,10 @@ impl LabController {
                 )
                 .await?;
             }
-        }
+            installed
+        } else {
+            true
+        };
         if let Some(record) = self.modules.read().await.get(backend_id) {
             if record.state == "installing" {
                 return self.module_status(backend_id).await;
@@ -1662,7 +1665,7 @@ impl LabController {
         let variant_id = variant.id.clone();
         tokio::spawn(async move {
             let result: Result<RuntimeProvisionStatus> = async {
-                if !bundled {
+                if !model_ready {
                     loop {
                         if cancel.load(Ordering::Acquire) {
                             return Err(anyhow!("module installation cancelled"));
