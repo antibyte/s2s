@@ -197,8 +197,8 @@ jobs:
             docker buildx build --platform linux/amd64 --provenance=true --sbom=false --push \
               -t "ghcr.io/$owner/$repository:$TAG" -f "$dockerfile" "$@" s2s-vulkan
           }
-          if [[ "$GITHUB_REF_NAME" == "v0.2.8-speech-lab" ]]; then
-            # Only the gateway changes; retain the signed v0.2.7 sidecars.
+          if [[ "$GITHUB_REF_NAME" == "v0.2.8-speech-lab" || "$GITHUB_REF_NAME" == "v0.2.9-speech-lab" ]]; then
+            # Only the gateway changes; reuse the signed v0.2.7 sidecars.
             previous_tag=sha-557ccf7e1209d47c859fa0ec7f2a5237b20d27ed
             mapfile -t unchanged_repositories < <(python - <<'PY'
           import json

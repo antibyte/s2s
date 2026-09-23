@@ -541,6 +541,7 @@ impl BackendCatalog {
             }
             if variant.accelerator == "cpu" {
                 variant.endpoint = "http://llama-fallback:8080/v1".into();
+                variant.health_path = "/models".into();
                 variant.container.clear();
                 variant.image.clear();
             } else {
@@ -1231,6 +1232,7 @@ mod tests {
             let variant = resolve_variant(backend, &hardware).unwrap();
             assert_eq!(variant.id, "local-fallback-cpu");
             assert_eq!(variant.endpoint, "http://llama-fallback:8080/v1");
+            assert_eq!(variant.health_path, "/models");
             assert!(variant.container.is_empty());
             assert!(variant.image.is_empty());
         }
