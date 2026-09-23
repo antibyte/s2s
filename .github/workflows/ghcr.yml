@@ -197,6 +197,25 @@ jobs:
             docker buildx build --platform linux/amd64 --provenance=true --sbom=false --push \
               -t "ghcr.io/$owner/$repository:$TAG" -f "$dockerfile" "$@" s2s-vulkan
           }
+          if [[ "$GITHUB_REF_NAME" == "v0.2.8-speech-lab" ]]; then
+            # Only the gateway changes; retain the signed v0.2.7 sidecars.
+            previous_tag=sha-557ccf7e1209d47c859fa0ec7f2a5237b20d27ed
+            mapfile -t unchanged_repositories < <(python - <<'PY'
+          import json
+          with open("s2s-vulkan/deploy/speech-lab-bundle.json", encoding="utf-8") as fh:
+              images = json.load(fh)["images"]
+          for repository in sorted({ref.split("/", 2)[-1].split("@", 1)[0]
+                                    for key, ref in images.items() if key != "gateway"}):
+              print(repository)
+          PY
+            )
+            for repository in "${unchanged_repositories[@]}"; do
+              docker buildx imagetools create \
+                -t "ghcr.io/$owner/$repository:$TAG" \
+                "ghcr.io/$owner/$repository:$previous_tag"
+            done
+            exit 0
+          fi
           if [[ "$GITHUB_REF_NAME" == "v0.2.7-speech-lab" ]]; then
             # Only the gateway changes; reuse the signed v0.2.6 sidecars.
             previous_tag=sha-f20fc389665f53c9615d9c57c117d66c2b4eb1e3

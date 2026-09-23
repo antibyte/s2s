@@ -504,6 +504,9 @@ impl BackendCatalog {
         if env_truthy("S2S_AURAGO_PRESTARTED_CONFUCIUS") {
             catalog.use_prestarted_confucius()?;
         }
+        if env_truthy("S2S_AURAGO_PRESTARTED_LLM") {
+            catalog.use_prestarted_llm()?;
+        }
         catalog.validate()?;
         Ok(catalog)
     }
@@ -521,6 +524,28 @@ impl BackendCatalog {
                 variant.endpoint = "http://confucius-asr:8082".into();
                 variant.container.clear();
                 variant.image.clear();
+            }
+        }
+        Ok(())
+    }
+
+    fn use_prestarted_llm(&mut self) -> Result<()> {
+        let backend = self
+            .backends
+            .iter_mut()
+            .find(|backend| backend.id == "local-fallback" && backend.stage == BackendStage::Llm)
+            .context("AuraGo prestarted LLM is missing from the catalog")?;
+        for variant in &mut backend.variants {
+            if !variant.platforms.iter().any(|platform| platform == "linux") {
+                continue;
+            }
+            if variant.accelerator == "cpu" {
+                variant.endpoint = "http://llama-fallback:8080/v1".into();
+                variant.container.clear();
+                variant.image.clear();
+            } else {
+                // AuraGo starts the bundled Granite sidecar on CPU for every GPU profile.
+                variant.platforms.retain(|platform| platform != "linux");
             }
         }
         Ok(())
@@ -1191,6 +1216,34 @@ mod tests {
         assert!(!regular.find("confucius4-r2t2").unwrap().variants[0]
             .container
             .is_empty());
+    }
+
+    #[test]
+    fn aurago_prestarted_llm_uses_healthy_cpu_sidecar_on_amd_and_nvidia() {
+        let mut catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        catalog.use_prestarted_llm().unwrap();
+        catalog.validate().unwrap();
+        let backend = catalog.find("local-fallback").unwrap();
+        for hardware in [
+            hw("amd", &["cpu", "vulkan"]),
+            hw("nvidia", &["cpu", "cuda"]),
+        ] {
+            let variant = resolve_variant(backend, &hardware).unwrap();
+            assert_eq!(variant.id, "local-fallback-cpu");
+            assert_eq!(variant.endpoint, "http://llama-fallback:8080/v1");
+            assert!(variant.container.is_empty());
+            assert!(variant.image.is_empty());
+        }
+        let regular: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        assert_eq!(
+            resolve_variant(
+                regular.find("local-fallback").unwrap(),
+                &hw("nvidia", &["cpu", "cuda"])
+            )
+            .unwrap()
+            .id,
+            "local-fallback-cuda"
+        );
     }
 
     #[test]

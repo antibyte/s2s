@@ -121,8 +121,8 @@ def generate(bundle: dict, catalog: dict) -> dict:
     gateway = next(service for service in services if service["role"] == "gateway")
     gateway["environment"] = [
         value for value in gateway.get("environment", [])
-        if not value.startswith("S2S_AURAGO_PRESTARTED_CONFUCIUS=")
-    ] + ["S2S_AURAGO_PRESTARTED_CONFUCIUS=1"]
+        if not value.startswith(("S2S_AURAGO_PRESTARTED_CONFUCIUS=", "S2S_AURAGO_PRESTARTED_LLM="))
+    ] + ["S2S_AURAGO_PRESTARTED_CONFUCIUS=1", "S2S_AURAGO_PRESTARTED_LLM=1"]
     if not any(service["role"] == "control_init" for service in services):
         gateway_index = next(i for i, service in enumerate(services) if service["role"] == "gateway")
         services.insert(
@@ -260,6 +260,19 @@ def validate(bundle: dict, catalog: dict) -> None:
     gateway = [service for service in bundle.get("services", []) if service.get("role") == "gateway"]
     if len(gateway) != 1 or "S2S_AURAGO_PRESTARTED_CONFUCIUS=1" not in gateway[0].get("environment", []):
         errors.append("the managed gateway must reuse AuraGo's prestarted Confucius ASR")
+    if len(gateway) != 1 or "S2S_AURAGO_PRESTARTED_LLM=1" not in gateway[0].get("environment", []):
+        errors.append("the managed gateway must reuse AuraGo's prestarted LLM")
+    llm = [service for service in bundle.get("services", []) if service.get("role") == "llm"]
+    if len(llm) != 1 or llm[0].get("port") != 8080 or not any(
+        flag == "--port" and value == "8080"
+        for flag, value in zip(llm[0].get("command", []), llm[0].get("command", [])[1:])
+    ):
+        errors.append("the managed LLM must listen on its image healthcheck port 8080")
+    if len(gateway) == 1 and not any(
+        flag == "--llm-base-url" and value == "http://llama-fallback:8080/v1"
+        for flag, value in zip(gateway[0].get("command", []), gateway[0].get("command", [])[1:])
+    ):
+        errors.append("the managed gateway must use the prestarted LLM on port 8080")
     if any(service.get("docker_socket") for service in bundle.get("services", []) if service.get("role") != "controller"):
         errors.append("a non-controller service has Docker socket access")
     if errors:

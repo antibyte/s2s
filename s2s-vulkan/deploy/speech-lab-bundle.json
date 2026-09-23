@@ -79,14 +79,14 @@
       "role": "llm",
       "image": "llm",
       "health_path": "/health",
-      "port": 8081,
+      "port": 8080,
       "command": [
         "-m",
         "/opt/s2s-models/granite-3.3-2b-instruct-q4_k_m.gguf",
         "--host",
         "0.0.0.0",
         "--port",
-        "8081",
+        "8080",
         "-c",
         "2048",
         "--alias",
@@ -149,7 +149,7 @@
         "--tts-url",
         "http://supertonic:8083/v1/audio/speech",
         "--llm-base-url",
-        "http://llama-fallback:8081/v1",
+        "http://llama-fallback:8080/v1",
         "--whisper-url",
         "http://confucius-asr:8082",
         "--stt-api",
@@ -158,7 +158,8 @@
         "confucius4-r2t2"
       ],
       "environment": [
-        "S2S_AURAGO_PRESTARTED_CONFUCIUS=1"
+        "S2S_AURAGO_PRESTARTED_CONFUCIUS=1",
+        "S2S_AURAGO_PRESTARTED_LLM=1"
       ]
     },
     {

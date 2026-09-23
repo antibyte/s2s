@@ -55,6 +55,11 @@ availability and does not ask its module controller to provision a second
 Confucius container. Standalone s2s deployments keep their normal managed
 variants. AuraGo passes the selected accelerator and host GPU vendor to the
 gateway so catalog selection matches the running ASR image.
+The managed bundle also sets `S2S_AURAGO_PRESTARTED_LLM=1`. Its Granite LLM
+service runs on CPU at `llama-fallback:8080`, matching the image healthcheck;
+the gateway uses that existing service for the Linux `local-fallback` catalog
+entry. CUDA hosts still use the prestarted CPU Granite service in the Lab UI.
+Standalone s2s keeps its own LLM variants and ports.
 
 ## Capability profile
 
