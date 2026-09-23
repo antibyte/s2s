@@ -30,6 +30,8 @@ The browser and inference sidecars never receive a Docker socket. Only the
 binary's `--mode lab` controller reaches a pinned socket proxy, and it can only
 start or stop pre-created containers carrying the required
 `s2s.lab.managed`, `stage` and `backend-id` labels.
+The Compose proxy is confined to the internal `s2s-control` network. A proxy
+at any other URL requires `S2S_DOCKER_PROXY_TOKEN_FILE`.
 
 ```powershell
 Copy-Item .env.example .env
@@ -90,6 +92,12 @@ The CPU Compose stack runs without GPU passthrough. Add
 `docker/docker-compose.nvidia.yml` for CUDA or
 `docker/docker-compose.linux-gpu.yml` for Vulkan and `/dev/dri`.
 The model is subject to the [NetEase model use license](https://github.com/netease-youdao/Confucius4-R2T2/blob/master/MODEL_LICENSE).
+On Windows Docker Desktop, the catalog selects the native Vulkan host variant.
+The Browser Lab downloads the pinned Q4_K_M model and Q8_0 projector after
+confirmation into `models/confucius4-r2t2/`; `scripts/host_idle_agent.ps1`
+starts the allowlisted `llama-server.exe` on the selected Vulkan device.
+The model becomes selectable once the host agent is running and both files are
+installed. Linux continues to use the bundled CPU, CUDA, or Vulkan images.
 Both original license texts are retained in each image under `/opt/s2s-models/`.
 The GGUF quantization is a derivative of the original model. Any modifications
 made to the original model in this Derivative Work are not endorsed, warranted,

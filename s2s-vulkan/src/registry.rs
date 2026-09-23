@@ -1044,6 +1044,7 @@ pub fn is_known_host_profile(value: &str) -> bool {
             | "chatterbox-python"
             | "inflect-python"
             | "audio8-python"
+            | "llama-confucius"
             | "llama-granite"
             | "qwen-sycl"
             | "supertonic-webgpu"
@@ -1347,6 +1348,14 @@ mod tests {
             let selected = resolve_variant(backend, &hw(vendor, &accelerators)).unwrap();
             assert_eq!(selected.id, expected);
         }
+
+        let mut windows = hw("intel", &["vulkan", "cpu"]);
+        windows.platform = "windows".into();
+        let selected = resolve_variant(backend, &windows).unwrap();
+        assert_eq!(selected.id, "confucius4-r2t2-vulkan-windows");
+        assert_eq!(selected.host_profile, "llama-confucius");
+        assert!(!variant_bundled(backend, selected));
+        assert_eq!(variant_artifacts(backend, selected).len(), 2);
     }
 
     #[test]

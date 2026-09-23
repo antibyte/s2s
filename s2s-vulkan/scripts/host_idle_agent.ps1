@@ -188,6 +188,11 @@ function New-Profile {
 }
 
 $Script:Profiles = @{
+    "llama-confucius" = New-Profile `
+        -Name "llama-confucius" -Stage "asr" -Port 8082 `
+        -Executable $Script:LlamaExe `
+        -BackendIds @("confucius4-r2t2") `
+        -VariantIds @("confucius4-r2t2-vulkan-windows")
     "crispasr-whisper" = New-Profile `
         -Name "crispasr-whisper" -Stage "asr" -Port 8082 `
         -Executable $Script:CrispAsrExe `
@@ -658,6 +663,18 @@ function Get-LaunchSpec {
         "--port", "$($Profile.port)"
     )
     switch ([string]$Profile.name) {
+        "llama-confucius" {
+            $model = Resolve-ModelPath "confucius4-r2t2\confucius4-r2t2.Q4_K_M.gguf"
+            $projector = Resolve-ModelPath "confucius4-r2t2\confucius4-r2t2.mmproj-Q8_0.gguf"
+            return [pscustomobject]@{
+                arguments = @(
+                    "-m", $model, "--mmproj", $projector, "-dev", "Vulkan$effectiveVulkanDevice",
+                    "-ngl", "99", "-c", "4096",
+                    "--alias", "confucius4-r2t2", "--host", "127.0.0.1", "--port", "$($Profile.port)"
+                )
+                environment = @{ GGML_BACKEND = "Vulkan$effectiveVulkanDevice" }
+            }
+        }
         "crispasr-whisper" {
             $model = Get-WhisperModel -BackendId ([string]$Command.backend_id)
             $args = @("--server", "-m", $model, "--gpu-backend", "vulkan",
@@ -1298,7 +1315,7 @@ function Write-Heartbeat {
             continue
         }
         $name = [string]$profile.name
-        $needsVulkan = $name -match '^(crispasr-|supertonic-webgpu|qwen-sycl|llama-granite|xtts-webgpu)'
+        $needsVulkan = $name -match '^(crispasr-|supertonic-webgpu|qwen-sycl|llama-confucius|llama-granite|xtts-webgpu)'
         if ($needsVulkan -and -not $vulkan.available) {
             continue
         }

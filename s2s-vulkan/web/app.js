@@ -472,7 +472,7 @@ function catalogOption(entry) {
     available: activatable && runtimeState !== "unavailable",
     compatible,
     activatable,
-    managedRuntime: Boolean(variant?.container),
+    managedRuntime: hostManaged || Boolean(variant?.container),
     variantId: entry.variant_id || variant?.id || "",
     installed: entry.installed === true,
     bundled: entry.bundled === true,
@@ -1264,6 +1264,33 @@ async function ensureModuleReady(opt) {
       ms: 3200,
     });
     return false;
+  }
+  if (opt.hostManaged) {
+    if (["host_module_delivery_pending", "unavailable"].includes(opt.runtimeState)) {
+      showToast(opt.runtimeReason || `Laufzeitstatus: ${opt.runtimeState}`, { error: true, ms: 3200 });
+      return false;
+    }
+    if (opt.installed) return true;
+    const needsHf = Boolean(opt.authRequired || opt.accessUrl);
+    const approved = await confirmModelAction({
+      title: "Speech-Lab-Modell herunterladen",
+      message: `${opt.name} wird für den Windows-Host installiert. Lizenz: ${opt.licenses.join(" + ") || "siehe Modellkarte"}.`,
+      size: `Modell: ${formatModelSize(opt.downloadSizeBytes)}`,
+      confirmLabel: "OK · herunterladen",
+      hfAuth: needsHf ? { accessUrl: opt.accessUrl || "", tokenConfigured: Boolean(opt.hfTokenConfigured) } : null,
+    });
+    if (!approved) return false;
+    try {
+      await apiRequest(`/api/v1/models/${encodeURIComponent(opt.id)}/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hf_token: approved.hfToken, remember: approved.remember }),
+      });
+    } catch (error) {
+      showToast(`Download konnte nicht gestartet werden: ${error.message}`, { error: true, ms: 3200 });
+      return false;
+    }
+    return waitForModelDownload(opt);
   }
   if (!opt.managedRuntime || ["host_module_delivery_pending", "needs_configuration", "needs_credentials", "unhealthy", "unavailable"].includes(opt.runtimeState)) {
     showToast(opt.runtimeReason || `Laufzeitstatus: ${opt.runtimeState}`, { error: true, ms: 3200 });

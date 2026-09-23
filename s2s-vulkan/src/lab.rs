@@ -425,7 +425,7 @@ impl ContainerControl for DisabledContainerControl {
 pub struct DockerProxyControl {
     client: reqwest::Client,
     base_url: String,
-    token: String,
+    token: Option<String>,
 }
 
 impl DockerProxyControl {
@@ -434,22 +434,29 @@ impl DockerProxyControl {
         if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
             return Err(anyhow!("S2S_DOCKER_PROXY_URL must be http(s)"));
         }
+        let token = std::env::var("S2S_DOCKER_PROXY_TOKEN_FILE")
+            .ok()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .map(|token| token.trim().to_string())
+            .filter(|token| !token.is_empty());
+        if base_url != "http://docker-proxy:2375" && token.is_none() {
+            return Err(anyhow!("S2S_DOCKER_PROXY_TOKEN_FILE is required"));
+        }
         Ok(Self {
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(20))
                 .build()?,
             base_url,
-            token: std::env::var("S2S_DOCKER_PROXY_TOKEN_FILE")
-                .ok()
-                .and_then(|path| std::fs::read_to_string(path).ok())
-                .map(|token| token.trim().to_string())
-                .filter(|token| !token.is_empty())
-                .ok_or_else(|| anyhow!("S2S_DOCKER_PROXY_TOKEN_FILE is required"))?,
+            token,
         })
     }
 
     fn request(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
-        self.client.request(method, url).bearer_auth(&self.token)
+        let request = self.client.request(method, url);
+        match &self.token {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        }
     }
 
     async fn post_action(&self, container: &str, action: &str) -> Result<()> {
@@ -1482,7 +1489,9 @@ impl LabController {
                 status.runtime_state.as_str(),
                 "ready" | "running" | "external"
             );
-            status.activatable = status.compatible && status.installed && runtime_ready;
+            let host_startable = status.host_managed && status.runtime_state == "stopped";
+            status.activatable =
+                status.compatible && status.installed && (runtime_ready || host_startable);
             status.available = status.activatable;
         }
         LabCatalogResponse {
@@ -2670,11 +2679,6 @@ impl LabController {
         let variant = resolve_variant(backend, &self.hardware).ok_or_else(|| {
             anyhow!("backend '{backend_id}' has no compatible certified variant for this host")
         })?;
-        if !variant.host_profile.is_empty() {
-            return Err(anyhow!(
-                "host_module_delivery_pending: managed Windows host-module delivery is not installed"
-            ));
-        }
         if !variant.container.is_empty() {
             if !self.docker_control_enabled {
                 return Err(anyhow!(
