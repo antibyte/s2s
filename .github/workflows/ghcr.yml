@@ -106,6 +106,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Free runner disk for managed images
+        if: github.event_name != 'pull_request'
+        run: |
+          df -h /
+          # The stock runner's Android, .NET and GHC SDKs are unused here.
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
       - name: Validate bundle-v2 catalog matrix
         run: |
           python s2s-vulkan/scripts/speech_lab_bundle.py
@@ -173,6 +181,10 @@ jobs:
         run: |
           set -euo pipefail
           owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          reclaim_build_cache() {
+            docker buildx prune --all --force
+            df -h /
+          }
           build() {
             repository="$1"; dockerfile="$2"; shift 2
             docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push \
@@ -198,15 +210,18 @@ jobs:
           build s2s-asr-voxtral-cpu s2s-vulkan/docker/Dockerfile.voxtral
           build s2s-asr-voxtral-cuda s2s-vulkan/docker/Dockerfile.voxtral \
             --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+          reclaim_build_cache
           build s2s-tts-qwen-sycl-aot s2s-vulkan/docker/Dockerfile.tts-sycl \
             --build-arg SYCL_DEVICE_ARCH=bmg_g21
           build s2s-tts-qwen-sycl-jit s2s-vulkan/docker/Dockerfile.tts-sycl
+          reclaim_build_cache
           build s2s-tts-qwen-vulkan s2s-vulkan/docker/Dockerfile.tts
           build s2s-tts-qwen-cuda s2s-vulkan/docker/Dockerfile.tts
           build s2s-tts-kokoro s2s-vulkan/docker/Dockerfile.kokoro
           build s2s-tts-vibevoice-cpu s2s-vulkan/docker/Dockerfile.vibevoice
           build s2s-tts-vibevoice-cuda s2s-vulkan/docker/Dockerfile.vibevoice \
             --build-arg CRISPASR_IMAGE=ghcr.io/crispstrobe/crispasr:main-cuda
+          reclaim_build_cache
           build_without_sbom s2s-tts-higgs-cuda s2s-vulkan/docker/Dockerfile.higgs
           build s2s-llama-granite s2s-vulkan/docker/Dockerfile.llama
           build s2s-llama-granite-cuda s2s-vulkan/docker/Dockerfile.llama \
