@@ -11,7 +11,7 @@ Heavy inference is **not** forced through PyTorch-on-Vulkan. Instead, the app ta
 | Stage | Default backend | Vulkan path |
 | ----- | --------------- | ----------- |
 | **VAD** | Energy + hangover (CPU) | leave on CPU |
-| **STT** | `whisper-server` HTTP | build [whisper.cpp](https://github.com/ggml-org/whisper.cpp) with `-DGGML_VULKAN=1` |
+| **STT** | Confucius4-R2T2 GGUF through `llama-server` | published [llama.cpp](https://github.com/ggml-org/llama.cpp) CUDA and Vulkan server images |
 | **LLM** | OpenAI-compatible `llama-server` | build [llama.cpp](https://github.com/ggerganov/llama.cpp) with `-DGGML_VULKAN=ON` |
 | **TTS** | HTTP sidecars | Qwen uses SYCL on Intel; certified Vulkan or CUDA variants can be registered for other vendors |
 
@@ -68,7 +68,7 @@ AuraGo integration (capability profile, suggestions, planned gateway) is documen
 - Lab UI shows system tier + **Empfohlen** badges from suggestions (manual pick still)
 - AuraGo production: `S2S_LAB_IDLE_UNLOAD_SECS=0` (see `.env.example` and `docs/aurago-integration.md`)
 
-`faster-whisper tiny`, Supertonic and Granite 3.3 2B Q4 are immutable parts of
+`Confucius4-R2T2 Q4_K_M`, Supertonic and Granite 3.3 2B Q4 are immutable parts of
 their respective images and form the first active stack. All other weights are
 absent in a fresh model volume. Selecting one opens a size confirmation; only
 after approval does the controller download it. A running download can be
@@ -82,6 +82,21 @@ DELETE /api/v1/models/{backend-id}            delete inactive model files
 
 The Lab Compose file forces legacy first-boot download flags off even if an old
 `.env` still contains them. This prevents model traffic before UI approval.
+
+The default ASR uses the pinned
+[Confucius4-R2T2 GGUF](https://huggingface.co/mradermacher/Confucius4-R2T2-GGUF)
+model and Q8_0 audio projector, served at `POST /v1/audio/transcriptions`.
+The CPU Compose stack runs without GPU passthrough. Add
+`docker/docker-compose.nvidia.yml` for CUDA or
+`docker/docker-compose.linux-gpu.yml` for Vulkan and `/dev/dri`.
+The model is subject to the [NetEase model use license](https://github.com/netease-youdao/Confucius4-R2T2/blob/master/MODEL_LICENSE).
+Both original license texts are retained in each image under `/opt/s2s-models/`.
+The GGUF quantization is a derivative of the original model. Any modifications
+made to the original model in this Derivative Work are not endorsed, warranted,
+or guaranteed by the original right-holder of the original model, and the
+original right-holder disclaims all liability related to this Derivative Work.
+Downstream recipients must comply with the model license. Faster Whisper remains
+available as an optional catalog backend.
 
 Accelerator resolution is catalog-driven: certified Vulkan first, CUDA on
 NVIDIA, explicit SYCL variants on Intel (Qwen), then CPU. Experimental variants

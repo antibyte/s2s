@@ -39,8 +39,12 @@ fi
 "${compose[@]}" create
 
 optional_containers=(
+  s2s-whisper-tiny
   s2s-whisper-base
   s2s-whisper-small
+  s2s-confucius-cpu
+  s2s-confucius-cuda
+  s2s-confucius-vulkan
   s2s-parakeet-cpu
   s2s-parakeet-cuda
   s2s-parakeet-xpu
@@ -55,5 +59,5 @@ for container in "${optional_containers[@]}"; do
   fi
 done
 
-"${compose[@]}" up -d docker-proxy model-init supertonic whisper-tiny llama s2s web
-echo "Speech Lab ready at http://127.0.0.1:${WEB_PORT:-8088} (ASR=fw-tiny, LLM=Granite 3.3, TTS=supertonic)"
+"${compose[@]}" up -d docker-proxy model-init supertonic confucius llama s2s web
+echo "Speech Lab ready at http://127.0.0.1:${WEB_PORT:-8088} (ASR=confucius4-r2t2, LLM=Granite 3.3, TTS=supertonic)"

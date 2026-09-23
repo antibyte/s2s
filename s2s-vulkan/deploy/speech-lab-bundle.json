@@ -7,6 +7,9 @@
     "gateway": "ghcr.io/antibyte/s2s-vulkan@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "controller": "ghcr.io/antibyte/s2s-speech-lab-controller@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "whisper": "ghcr.io/antibyte/s2s-whisper-fw@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "confucius_cpu": "ghcr.io/antibyte/s2s-asr-confucius-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "confucius_cuda": "ghcr.io/antibyte/s2s-asr-confucius-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "confucius_vulkan": "ghcr.io/antibyte/s2s-asr-confucius-vulkan@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "parakeet_cpu": "ghcr.io/antibyte/s2s-asr-parakeet-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "parakeet_cuda": "ghcr.io/antibyte/s2s-asr-parakeet-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "voxtral_cpu": "ghcr.io/antibyte/s2s-asr-voxtral-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -52,9 +55,25 @@
     },
     {
       "role": "asr",
-      "image": "asr",
+      "image": "confucius_cpu",
       "health_path": "/health",
-      "port": 8082
+      "port": 8082,
+      "command": [
+        "-m",
+        "/opt/s2s-models/confucius4-r2t2.Q4_K_M.gguf",
+        "--mmproj",
+        "/opt/s2s-models/confucius4-r2t2.mmproj-Q8_0.gguf",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8082",
+        "-c",
+        "4096",
+        "-ngl",
+        "99",
+        "--alias",
+        "confucius4-r2t2"
+      ]
     },
     {
       "role": "llm",
@@ -132,7 +151,11 @@
         "--llm-base-url",
         "http://llama-fallback:8081/v1",
         "--whisper-url",
-        "http://whisper-tiny:8082"
+        "http://confucius-asr:8082",
+        "--stt-api",
+        "openai",
+        "--stt-model",
+        "confucius4-r2t2"
       ]
     },
     {
@@ -144,7 +167,7 @@
   ],
   "stable_backends": {
     "asr": [
-      "faster-whisper-tiny"
+      "confucius4-r2t2"
     ],
     "tts": [
       "supertonic"
@@ -162,6 +185,222 @@
     "optional_downloads_require_ui_approval": true
   },
   "runtimes": [
+    {
+      "backend_id": "confucius4-r2t2",
+      "variant_id": "confucius4-r2t2-cpu",
+      "stage": "asr",
+      "container": "s2s-confucius-cpu",
+      "image": "ghcr.io/antibyte/s2s-asr-confucius-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "confucius_cpu",
+      "image_download_size_bytes": 1800000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cpu",
+      "experimental": false,
+      "command": [
+        "-m",
+        "/opt/s2s-models/confucius4-r2t2.Q4_K_M.gguf",
+        "--mmproj",
+        "/opt/s2s-models/confucius4-r2t2.mmproj-Q8_0.gguf",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8082",
+        "-c",
+        "4096",
+        "-ngl",
+        "0",
+        "--alias",
+        "confucius4-r2t2"
+      ],
+      "environment": {},
+      "aliases": [
+        "confucius-cpu"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 4294967296,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 1073741824,
+        "gpu_count": 0,
+        "vram_gb": 2.0
+      },
+      "license": "netease-model-use-license-agreement",
+      "auth_required": false
+    },
+    {
+      "backend_id": "confucius4-r2t2",
+      "variant_id": "confucius4-r2t2-cuda",
+      "stage": "asr",
+      "container": "s2s-confucius-cuda",
+      "image": "ghcr.io/antibyte/s2s-asr-confucius-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "confucius_cuda",
+      "image_download_size_bytes": 5000000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cuda",
+      "experimental": false,
+      "command": [
+        "-m",
+        "/opt/s2s-models/confucius4-r2t2.Q4_K_M.gguf",
+        "--mmproj",
+        "/opt/s2s-models/confucius4-r2t2.mmproj-Q8_0.gguf",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8082",
+        "-c",
+        "4096",
+        "-ngl",
+        "99",
+        "--alias",
+        "confucius4-r2t2"
+      ],
+      "environment": {},
+      "aliases": [
+        "confucius-cuda"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 4294967296,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 1073741824,
+        "gpu_count": 1,
+        "vram_gb": 2.0
+      },
+      "license": "netease-model-use-license-agreement",
+      "auth_required": false
+    },
+    {
+      "backend_id": "confucius4-r2t2",
+      "variant_id": "confucius4-r2t2-vulkan",
+      "stage": "asr",
+      "container": "s2s-confucius-vulkan",
+      "image": "ghcr.io/antibyte/s2s-asr-confucius-vulkan@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "confucius_vulkan",
+      "image_download_size_bytes": 2200000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "vulkan",
+      "experimental": false,
+      "command": [
+        "-m",
+        "/opt/s2s-models/confucius4-r2t2.Q4_K_M.gguf",
+        "--mmproj",
+        "/opt/s2s-models/confucius4-r2t2.mmproj-Q8_0.gguf",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8082",
+        "-c",
+        "4096",
+        "-ngl",
+        "99",
+        "--alias",
+        "confucius4-r2t2"
+      ],
+      "environment": {},
+      "aliases": [
+        "confucius-vulkan"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 4294967296,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 1073741824,
+        "gpu_count": 1,
+        "vram_gb": 2.0
+      },
+      "license": "netease-model-use-license-agreement",
+      "auth_required": false
+    },
     {
       "backend_id": "fw-base",
       "variant_id": "fw-base-cpu",

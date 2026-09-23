@@ -1,7 +1,7 @@
 # s2s-vulkan — GHCR image + first-boot model download
 #
 # 8 GB GPU lab stack (default, no Ollama):
-#   ASR  faster-whisper tiny (bundled)
+#   ASR  Confucius4-R2T2 Q4_K_M (bundled)
 #   LLM  Granite 3.3 2B Q4 (bundled)
 #   TTS  Supertonic ONNX (bundled, CPU)  ← immediately ready
 #   Optional Qwen TTS     ~3–4 GB alone — use profile "tts" carefully
@@ -94,7 +94,7 @@ services:
         condition: service_started
       supertonic:
         condition: service_healthy
-      whisper-tiny:
+      confucius:
         condition: service_healthy
       llama:
         condition: service_healthy
@@ -104,7 +104,9 @@ services:
       S2S_BUNDLE_VERSION: ${S2S_BUNDLE_VERSION:-unknown}
       RUST_LOG: ${RUST_LOG:-info}
       S2S_BACKEND_CATALOG: /app/config/backends.json
-      S2S_WHISPER_URL: ${S2S_WHISPER_URL:-http://whisper-tiny:8082}
+      S2S_WHISPER_URL: ${S2S_WHISPER_URL:-http://confucius-asr:8082}
+      S2S_STT_API: ${S2S_STT_API:-openai}
+      S2S_STT_MODEL: ${S2S_STT_MODEL:-confucius4-r2t2}
       S2S_LLM_URL: ${S2S_LLM_URL:-http://llama-fallback:8081/v1}
       S2S_LLM_EXTERNAL_URL: ${S2S_LLM_EXTERNAL_URL:-http://host.docker.internal:11434/v1}
       S2S_LLM_EXTERNAL_MODEL: ${S2S_LLM_EXTERNAL_MODEL:-${S2S_LLM_MODEL:-qwen3.5:cloud}}
@@ -163,7 +165,11 @@ services:
       - --model-name
       - ${S2S_LLM_MODEL:-granite-3.3-2b-instruct}
       - --whisper-url
-      - ${S2S_WHISPER_URL:-http://whisper-tiny:8082}
+      - ${S2S_WHISPER_URL:-http://confucius-asr:8082}
+      - --stt-api
+      - ${S2S_STT_API:-openai}
+      - --stt-model
+      - ${S2S_STT_MODEL:-confucius4-r2t2}
       - --max-tokens
       - "${S2S_MAX_TOKENS:-128}"
       - --min-speech-ms
@@ -277,6 +283,44 @@ services:
           - whisper
           - whisper-base
     restart: unless-stopped
+
+  confucius:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.confucius
+    image: ${CONFUCIUS_IMAGE:-s2s-asr-confucius:cpu}
+    container_name: s2s-confucius-cpu
+    labels:
+      s2s.lab.managed: "true"
+      stage: asr
+      backend-id: confucius4-r2t2
+    command:
+      - -m
+      - /opt/s2s-models/confucius4-r2t2.Q4_K_M.gguf
+      - --mmproj
+      - /opt/s2s-models/confucius4-r2t2.mmproj-Q8_0.gguf
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8082"
+      - -c
+      - "4096"
+      - -ngl
+      - "0"
+      - --alias
+      - confucius4-r2t2
+    networks:
+      s2s:
+        aliases:
+          - confucius-asr
+          - confucius-cpu
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8082/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 120s
 
   whisper-tiny:
     build:
@@ -479,7 +523,6 @@ services:
       s2s.lab.managed: "true"
       stage: llm
       backend-id: local-fallback
-    profiles: ["fallback", "managed", "full"]
     depends_on:
       model-init:
         condition: service_completed_successfully

@@ -25,6 +25,43 @@ services:
               count: all
               capabilities: [gpu, utility, compute, graphics]
 
+  confucius:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.confucius
+      args:
+        LLAMA_BASE_IMAGE: ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:bfb3264fc2166e01e2b4f9b537e45d7006d87c75021b911f132ef607f5bbced3
+    image: ${CONFUCIUS_IMAGE:-s2s-asr-confucius:cuda}
+    container_name: s2s-confucius-cuda
+    networks:
+      s2s:
+        aliases:
+          - confucius-asr
+          - confucius-cuda
+    command:
+      - -m
+      - /opt/s2s-models/confucius4-r2t2.Q4_K_M.gguf
+      - --mmproj
+      - /opt/s2s-models/confucius4-r2t2.mmproj-Q8_0.gguf
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8082"
+      - -c
+      - "4096"
+      - -ngl
+      - "99"
+      - --alias
+      - confucius4-r2t2
+    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility, compute]
+
   whisper-tiny:
     gpus: all
     deploy:

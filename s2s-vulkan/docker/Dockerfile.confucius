@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1.7
+
+# The same pinned model and audio projector are used by CPU, CUDA and Vulkan.
+# CI selects the matching llama.cpp server image through LLAMA_BASE_IMAGE.
+ARG LLAMA_BASE_IMAGE=ghcr.io/ggml-org/llama.cpp:server@sha256:fb8f521cdfee1b763a6ef0d6633922e780c1393c03b49945526550cf55010343
+FROM ${LLAMA_BASE_IMAGE}
+
+ADD --checksum=sha256:d2b05e834988852106f816919293d3a51e4039b44fb5c4e074fa913f083f2c6e \
+    https://huggingface.co/mradermacher/Confucius4-R2T2-GGUF/resolve/a5b8b2d84b7a429ba758ec3a67b89602540fb34a/Confucius4-R2T2.Q4_K_M.gguf?download=true \
+    /opt/s2s-models/confucius4-r2t2.Q4_K_M.gguf
+ADD --checksum=sha256:4fd02f8bb9fdf8792ba05e4fd433a40a3296ec299ca4fa5c46ae8f068740654c \
+    https://huggingface.co/mradermacher/Confucius4-R2T2-GGUF/resolve/a5b8b2d84b7a429ba758ec3a67b89602540fb34a/Confucius4-R2T2.mmproj-Q8_0.gguf?download=true \
+    /opt/s2s-models/confucius4-r2t2.mmproj-Q8_0.gguf
+
+ADD --checksum=sha256:4d9321cdad58182faa878b015de7d60069881614ddd7571de70f751a9b8e3811 \
+    https://raw.githubusercontent.com/netease-youdao/Confucius4-R2T2/c4611929bc3592b38dab34e96a8c9940d6da3755/MODEL_LICENSE \
+    /opt/s2s-models/MODEL_LICENSE
+ADD --checksum=sha256:18b438311ebb842c15a7c91d9dbb59034efdaf6fff0d105031ef7baf5eeed275 \
+    https://raw.githubusercontent.com/netease-youdao/Confucius4-R2T2/c4611929bc3592b38dab34e96a8c9940d6da3755/MODEL_LICENSE_zh \
+    /opt/s2s-models/MODEL_LICENSE_zh
+
+LABEL s2s.lab.bundled-model="mradermacher/Confucius4-R2T2-GGUF@a5b8b2d84b7a429ba758ec3a67b89602540fb34a" \
+      s2s.lab.bundled-bytes="1463115264" \
+      s2s.lab.model-license="netease-model-use-license-agreement" \
+      s2s.lab.model-license-files="/opt/s2s-models/MODEL_LICENSE,/opt/s2s-models/MODEL_LICENSE_zh"

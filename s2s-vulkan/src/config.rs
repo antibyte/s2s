@@ -51,6 +51,13 @@ pub enum SupertonicProvider {
     WebgpuVulkan,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
+pub enum SttApi {
+    #[default]
+    Whisper,
+    Openai,
+}
+
 /// Preferred accelerator. `auto` probes the host/container and sets `GGML_BACKEND`.
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
 pub enum GpuPreference {
@@ -111,6 +118,14 @@ pub struct Config {
     /// whisper-server base URL (POST /inference).
     #[arg(long, default_value = "http://127.0.0.1:8082", env = "S2S_WHISPER_URL")]
     pub whisper_url: String,
+
+    /// Multipart ASR API served at the active endpoint.
+    #[arg(long, value_enum, default_value_t = SttApi::Whisper, env = "S2S_STT_API")]
+    pub stt_api: SttApi,
+
+    /// Model alias for OpenAI-compatible transcription requests.
+    #[arg(long, default_value = "confucius4-r2t2", env = "S2S_STT_MODEL")]
+    pub stt_model: String,
 
     /// STT language hint (`auto`, `en`, `de`, …). Also default fallback for TTS when
     /// `--tts-language` is `auto` and the turn has no detected language.

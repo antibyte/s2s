@@ -1057,6 +1057,7 @@ fn is_known_protocol(value: &str) -> bool {
         value,
         "faster-whisper"
             | "whisper-cpp"
+            | "openai-asr"
             | "parakeet"
             | "voxtral"
             | "openai-tts"
@@ -1327,6 +1328,25 @@ mod tests {
         let backend = catalog.find("fw-small").unwrap();
         let selected = resolve_variant(backend, &hw("nvidia", &["cuda", "cpu"])).unwrap();
         assert_eq!(selected.accelerator, "cuda");
+    }
+
+    #[test]
+    fn confucius_selects_cuda_vulkan_or_cpu() {
+        let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let backend = catalog.find("confucius4-r2t2").unwrap();
+        for (vendor, accelerators, expected) in [
+            (
+                "nvidia",
+                vec!["cuda", "vulkan", "cpu"],
+                "confucius4-r2t2-cuda",
+            ),
+            ("amd", vec!["vulkan", "cpu"], "confucius4-r2t2-vulkan"),
+            ("intel", vec!["vulkan", "cpu"], "confucius4-r2t2-vulkan"),
+            ("unknown", vec!["cpu"], "confucius4-r2t2-cpu"),
+        ] {
+            let selected = resolve_variant(backend, &hw(vendor, &accelerators)).unwrap();
+            assert_eq!(selected.id, expected);
+        }
     }
 
     #[test]

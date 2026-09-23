@@ -2,6 +2,61 @@
   "schema_version": 2,
   "backends": [
     {
+      "id": "confucius4-r2t2",
+      "stage": "asr",
+      "name": "Confucius4-R2T2 GGUF",
+      "tag": "default",
+      "description": "GGUF speech recognition from mradermacher/Confucius4-R2T2-GGUF, served by llama.cpp. English and Chinese are primary; German and other languages are supported. Q4_K_M plus Q8_0 audio projector are bundled. Subject to the NetEase model use license.",
+      "protocol": "openai-asr",
+      "model": "confucius4-r2t2",
+      "languages": ["auto", "de", "en", "zh", "fr", "es", "it", "ja", "ko", "pt", "ru"],
+      "licenses": ["netease-model-use-license-agreement"],
+      "resources": {
+        "vram_gb": 2.0,
+        "ram_gb": 4.0,
+        "stars": {"cpu": 3, "gpu": 2, "vram": 2}
+      },
+      "bundled": true,
+      "variants": [
+        {
+          "id": "confucius4-r2t2-cuda",
+          "accelerator": "cuda",
+          "vendors": ["nvidia"],
+          "platforms": ["linux"],
+          "stable": true,
+          "endpoint": "http://confucius-cuda:8082",
+          "container": "s2s-confucius-cuda",
+          "image": "s2s-asr-confucius:cuda",
+          "health_path": "/health",
+          "environment": {}
+        },
+        {
+          "id": "confucius4-r2t2-vulkan",
+          "accelerator": "vulkan",
+          "vendors": ["amd", "intel"],
+          "platforms": ["linux"],
+          "stable": true,
+          "endpoint": "http://confucius-vulkan:8082",
+          "container": "s2s-confucius-vulkan",
+          "image": "s2s-asr-confucius:vulkan",
+          "health_path": "/health",
+          "environment": {}
+        },
+        {
+          "id": "confucius4-r2t2-cpu",
+          "accelerator": "cpu",
+          "vendors": ["any"],
+          "platforms": ["linux"],
+          "stable": true,
+          "endpoint": "http://confucius-cpu:8082",
+          "container": "s2s-confucius-cpu",
+          "image": "s2s-asr-confucius:cpu",
+          "health_path": "/health",
+          "environment": {}
+        }
+      ]
+    },
+    {
       "id": "fw-tiny",
       "stage": "asr",
       "name": "faster-whisper tiny",
@@ -3303,11 +3358,11 @@
     {
       "id": "balanced",
       "name": "Sofort startklar",
-      "asr_id": "fw-tiny",
+      "asr_id": "confucius4-r2t2",
       "tts_id": "supertonic",
       "llm_id": "local-fallback",
       "languages": ["de", "en", "fr", "es"],
-      "max_vram_gb": 2.0,
+      "max_vram_gb": 3.0,
       "latency_hint": "low",
       "quality_hint": "balanced"
     },

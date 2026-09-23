@@ -2,7 +2,7 @@
 //!
 //! The lab WebSocket sends `set_stack` JSON; handlers read `SharedConfig` each turn.
 
-use crate::config::{Config, TtsBackend};
+use crate::config::{Config, SttApi, TtsBackend};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -170,7 +170,9 @@ impl Drop for TurnPauseGuard {
 
 fn infer_asr_id(cfg: &Config) -> String {
     let url = cfg.whisper_url.to_ascii_lowercase();
-    if url.contains("voxtral") || url.contains(":8087") {
+    if url.contains("confucius") {
+        "confucius4-r2t2".into()
+    } else if url.contains("voxtral") || url.contains(":8087") {
         "voxtral-mini-4b-realtime".into()
     } else if url.contains("parakeet") {
         "parakeet-tdt-0.6b-v3".into()
@@ -449,7 +451,14 @@ fn asr_whisper_model(id: &str) -> Option<&'static str> {
 
 fn apply_asr(rt: &mut RuntimeState, id: &str) -> Option<String> {
     rt.asr_id = id.to_string();
+    rt.cfg.stt_api = SttApi::Whisper;
     match id {
+        "confucius4-r2t2" => {
+            rt.cfg.whisper_url = "http://127.0.0.1:8082".into();
+            rt.cfg.stt_api = SttApi::Openai;
+            rt.cfg.stt_model = "confucius4-r2t2".into();
+            Some(format!("ASR → Confucius4-R2T2 @ {}", rt.cfg.whisper_url))
+        }
         "fw-tiny" | "fw-base" | "fw-small" | "fw-medium" => {
             // Same host STT process; model reloaded via /reload.
             if rt.cfg.whisper_url.is_empty() {

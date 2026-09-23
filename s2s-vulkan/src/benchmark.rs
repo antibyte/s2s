@@ -1,6 +1,7 @@
 //! Persistent, repeatable benchmark runs for the active speech-lab stack.
 
 use crate::runtime::SharedRuntime;
+use crate::stt;
 use anyhow::{anyhow, Context, Result};
 use futures_util::StreamExt;
 use rusqlite::{params, Connection};
@@ -374,33 +375,10 @@ impl BenchmarkService {
             tokio::fs::write(&part_path, &wav).await?;
             tokio::fs::rename(&part_path, &audio_path).await?;
 
-            let url = format!("{}/inference", cfg.whisper_url.trim_end_matches('/'));
-            let file = reqwest::multipart::Part::bytes(wav)
-                .file_name("sample.wav")
-                .mime_str("audio/wav")?;
-            let mut form = reqwest::multipart::Form::new()
-                .part("file", file)
-                .text("response_format", "json")
-                .text("no_timestamps", "true");
-            if cfg.language != "auto" {
-                form = form.text("language", cfg.language.clone());
-            }
             let started = Instant::now();
-            let response = self
-                .client
-                .post(&url)
-                .multipart(form)
-                .send()
+            let transcript = stt::transcribe_wav_bytes(&self.client, &cfg, &wav)
                 .await
-                .with_context(|| format!("ASR benchmark POST {url}"))?
-                .error_for_status()?;
-            let value: Value = response.json().await?;
-            let transcript = value["text"]
-                .as_str()
-                .or_else(|| value["transcription"].as_str())
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+                .context("ASR benchmark transcription")?;
             let asr_ms = started.elapsed().as_secs_f64() * 1000.0;
             let memory_mib = self.managed_memory_mib(&cfg.whisper_url).await;
             samples.push(serde_json::json!({

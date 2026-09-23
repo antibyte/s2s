@@ -19,6 +19,9 @@ IMAGES = {
     "gateway": ("s2s-vulkan", 320_000_000),
     "controller": ("s2s-speech-lab-controller", 8_000_000),
     "whisper": ("s2s-whisper-fw", 2_400_000_000),
+    "confucius_cpu": ("s2s-asr-confucius-cpu", 1_800_000_000),
+    "confucius_cuda": ("s2s-asr-confucius-cuda", 5_000_000_000),
+    "confucius_vulkan": ("s2s-asr-confucius-vulkan", 2_200_000_000),
     "parakeet_cpu": ("s2s-asr-parakeet-cpu", 2_800_000_000),
     "parakeet_cuda": ("s2s-asr-parakeet-cuda", 7_500_000_000),
     "voxtral_cpu": ("s2s-asr-voxtral-cpu", 3_200_000_000),
@@ -44,6 +47,8 @@ def image_key(variant: dict) -> str:
     variant_id = variant["id"]
     if image.startswith("s2s-whisper-fw:"):
         return "whisper"
+    if image.startswith("s2s-asr-confucius:"):
+        return f"confucius_{accel}"
     if image.startswith("s2s-asr-parakeet:"):
         return f"parakeet_{'cuda' if accel == 'cuda' else 'cpu'}"
     if image.startswith("s2s-asr-voxtral:"):
@@ -76,7 +81,15 @@ def image_ref(key: str) -> str:
     return f"ghcr.io/antibyte/{repository}@sha256:{DIGEST}"
 
 
-def runtime_command(backend_id: str) -> list[str]:
+def runtime_command(backend_id: str, accelerator: str = "") -> list[str]:
+    if backend_id == "confucius4-r2t2":
+        return [
+            "-m", "/opt/s2s-models/confucius4-r2t2.Q4_K_M.gguf",
+            "--mmproj", "/opt/s2s-models/confucius4-r2t2.mmproj-Q8_0.gguf",
+            "--host", "0.0.0.0", "--port", "8082", "-c", "4096",
+            "-ngl", "0" if accelerator == "cpu" else "99",
+            "--alias", "confucius4-r2t2",
+        ]
     if backend_id == "supertonic":
         return [
             "--mode", "tts-server", "--host", "0.0.0.0", "--port", "8083",
@@ -163,7 +176,7 @@ def generate(bundle: dict, catalog: dict) -> dict:
                     "architectures": ["amd64"],
                     "accelerator": variant["accelerator"],
                     "experimental": not variant.get("stable", False),
-                    "command": runtime_command(backend["id"]),
+                    "command": runtime_command(backend["id"], variant["accelerator"]),
                     "environment": variant.get("environment", {}),
                     "aliases": sorted({endpoint.hostname}),
                     "model_mounts": sorted(model_paths),

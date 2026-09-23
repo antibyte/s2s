@@ -1,7 +1,7 @@
 //! Speech-to-text via whisper.cpp HTTP server (Vulkan-capable build).
 
 use crate::audio::pcm::encode_wav_f32;
-use crate::config::Config;
+use crate::config::{Config, SttApi};
 use crate::gateway::{read_response_bounded, MAX_GATEWAY_JSON_BYTES};
 use crate::messages::{Control, PipelineEvent, QueueItem, Transcription, VadAudio};
 use crate::runtime::SharedRuntime;
@@ -121,14 +121,20 @@ async fn transcribe(client: &reqwest::Client, cfg: &Config, audio: &VadAudio) ->
     transcribe_wav_bytes(client, cfg, &wav).await
 }
 
-/// Transcribe a WAV byte buffer via the active whisper-compatible `/inference` endpoint.
+/// Transcribe a WAV byte buffer via the selected ASR server API.
 /// Used by the AuraGo gateway and the pipeline STT handler.
 pub(crate) async fn transcribe_wav_bytes(
     client: &reqwest::Client,
     cfg: &Config,
     wav: &[u8],
 ) -> Result<String> {
-    let url = format!("{}/inference", cfg.whisper_url.trim_end_matches('/'));
+    let openai = cfg.stt_api == SttApi::Openai;
+    let path = if openai {
+        "/v1/audio/transcriptions"
+    } else {
+        "/inference"
+    };
+    let url = format!("{}{path}", cfg.whisper_url.trim_end_matches('/'));
 
     // whisper-server multipart fields (ggml-org/whisper.cpp examples/server).
     let file_part = Part::bytes(wav.to_vec())
@@ -137,15 +143,18 @@ pub(crate) async fn transcribe_wav_bytes(
 
     let mut form = Form::new()
         .part("file", file_part)
-        .text("temperature", cfg.stt_temperature.to_string())
         .text("response_format", "json");
+    if openai {
+        form = form.text("model", cfg.stt_model.clone());
+    } else {
+        form = form.text("temperature", cfg.stt_temperature.to_string());
+        // Prefer no timestamps for the whisper-server dialect.
+        form = form.text("no_timestamps", "true");
+    }
 
     if cfg.language != "auto" {
         form = form.text("language", cfg.language.clone());
     }
-
-    // Prefer no timestamps for lower latency / simpler parse.
-    form = form.text("no_timestamps", "true");
 
     let resp = client
         .post(&url)
@@ -160,12 +169,21 @@ pub(crate) async fn transcribe_wav_bytes(
             .await
             .map(|body| String::from_utf8_lossy(&body).into_owned())
             .unwrap_or_else(|error| format!("{error:#}"));
-        return Err(anyhow!("whisper-server {status}: {body}"));
+        return Err(anyhow!("ASR server {status}: {body}"));
     }
 
     let body = read_response_bounded(resp, MAX_GATEWAY_JSON_BYTES).await?;
-    let body = String::from_utf8(body).context("whisper-server response is not UTF-8")?;
-    parse_whisper_response(&body)
+    let body = String::from_utf8(body).context("ASR server response is not UTF-8")?;
+    let text = parse_whisper_response(&body)?;
+    if openai && cfg.stt_model.eq_ignore_ascii_case("confucius4-r2t2") {
+        if let Some((prefix, transcript)) = text.split_once("<asr_text>") {
+            let prefix = prefix.trim();
+            if prefix.is_empty() || prefix.to_ascii_lowercase().starts_with("language ") {
+                return Ok(transcript.trim().to_string());
+            }
+        }
+    }
+    Ok(text)
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,4 +230,64 @@ pub async fn health_check(base: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{extract::Multipart, routing::post, Json, Router};
+    use clap::Parser;
+
+    #[tokio::test]
+    async fn transcription_uses_selected_multipart_api() {
+        async fn openai(mut form: Multipart) -> Json<serde_json::Value> {
+            let mut model = String::new();
+            let mut file = Vec::new();
+            while let Some(field) = form.next_field().await.unwrap() {
+                match field.name().unwrap_or_default() {
+                    "model" => model = field.text().await.unwrap(),
+                    "file" => file = field.bytes().await.unwrap().to_vec(),
+                    "no_timestamps" => panic!("Whisper field sent to OpenAI ASR"),
+                    _ => {}
+                }
+            }
+            assert_eq!(model, "confucius4-r2t2");
+            assert_eq!(file, b"RIFF");
+            Json(serde_json::json!({"text": "language German<asr_text>Guten Morgen"}))
+        }
+
+        async fn whisper(mut form: Multipart) -> Json<serde_json::Value> {
+            let mut timestamps = String::new();
+            while let Some(field) = form.next_field().await.unwrap() {
+                match field.name().unwrap_or_default() {
+                    "no_timestamps" => timestamps = field.text().await.unwrap(),
+                    "model" => panic!("OpenAI model field sent to Whisper ASR"),
+                    _ => {}
+                }
+            }
+            assert_eq!(timestamps, "true");
+            Json(serde_json::json!({"text": "Hallo"}))
+        }
+
+        let app = Router::new()
+            .route("/v1/audio/transcriptions", post(openai))
+            .route("/inference", post(whisper));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::new();
+        let mut cfg = Config::parse_from(["s2s-vulkan"]);
+        cfg.whisper_url = format!("http://{address}");
+        cfg.stt_api = SttApi::Openai;
+        assert_eq!(
+            transcribe_wav_bytes(&client, &cfg, b"RIFF").await.unwrap(),
+            "Guten Morgen"
+        );
+        cfg.stt_api = SttApi::Whisper;
+        assert_eq!(
+            transcribe_wav_bytes(&client, &cfg, b"RIFF").await.unwrap(),
+            "Hallo"
+        );
+        server.abort();
+    }
 }

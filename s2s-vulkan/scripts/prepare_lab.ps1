@@ -52,8 +52,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $optionalContainers = @(
+    "s2s-whisper-tiny",
     "s2s-whisper-base",
     "s2s-whisper-small",
+    "s2s-confucius-cpu",
+    "s2s-confucius-cuda",
+    "s2s-confucius-vulkan",
     "s2s-parakeet-cpu",
     "s2s-parakeet-cuda",
     "s2s-parakeet-xpu",
@@ -69,7 +73,7 @@ foreach ($container in $optionalContainers) {
     }
 }
 
-$initialServices = @("docker-proxy", "model-init", "supertonic", "whisper-tiny", "llama", "s2s")
+$initialServices = @("docker-proxy", "model-init", "supertonic", "confucius", "llama", "s2s")
 if (-not $NoWeb) {
     $initialServices += "web"
 }
@@ -78,7 +82,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Could not start the initial Speech Lab stack."
 }
 
-Write-Host "Speech Lab ready: ASR=fw-tiny, LLM=Granite 3.3, TTS=supertonic"
+Write-Host "Speech Lab ready: ASR=confucius4-r2t2, LLM=Granite 3.3, TTS=supertonic"
 if (-not $NoWeb) {
     $webPort = if ($env:WEB_PORT) { $env:WEB_PORT } else { "8088" }
     Write-Host "Open http://127.0.0.1:$webPort"

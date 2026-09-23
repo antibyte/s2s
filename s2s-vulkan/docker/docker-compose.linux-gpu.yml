@@ -19,6 +19,39 @@ services:
       - "${VIDEO_GID:-44}"
       - "${RENDER_GID:-109}"
 
+  confucius:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.confucius
+      args:
+        LLAMA_BASE_IMAGE: ghcr.io/ggml-org/llama.cpp:server-vulkan@sha256:e3ec7c0cd473df7dfff299a60a0f292bf5c3e6a5202286484f896819eca6d6ed
+    image: ${CONFUCIUS_IMAGE:-s2s-asr-confucius:vulkan}
+    container_name: s2s-confucius-vulkan
+    networks:
+      s2s:
+        aliases:
+          - confucius-asr
+          - confucius-vulkan
+    devices: *dri-devices
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+    command:
+      - -m
+      - /opt/s2s-models/confucius4-r2t2.Q4_K_M.gguf
+      - --mmproj
+      - /opt/s2s-models/confucius4-r2t2.mmproj-Q8_0.gguf
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8082"
+      - -c
+      - "4096"
+      - -ngl
+      - "99"
+      - --alias
+      - confucius4-r2t2
+
   llama:
     devices: *dri-devices
     group_add:

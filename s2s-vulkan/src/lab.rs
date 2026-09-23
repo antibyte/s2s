@@ -4,7 +4,7 @@
 //! endpoints and environment are read from the validated embedded catalog.
 
 use crate::audio::pcm::encode_wav_f32;
-use crate::config::TtsBackend;
+use crate::config::{SttApi, TtsBackend};
 use crate::host_runtime::{HostAgentStatus, HostRuntimeClient};
 use crate::registry::{
     endpoint_for, resolve_variant, variant_artifacts, variant_bundled, variant_protocol,
@@ -2058,7 +2058,10 @@ impl LabController {
         let runtime = self.runtime.read().await.clone();
         let asr = match self.active_from_runtime(&runtime.asr_id).await {
             Some(active) => Some(active),
-            None => self.find_running_stage(BackendStage::Asr).await,
+            None => match self.find_running_stage(BackendStage::Asr).await {
+                Some(active) => Some(active),
+                None => self.active_bundled_asr(&runtime).await,
+            },
         };
         let tts = match self.active_from_runtime(&runtime.tts_id).await {
             Some(active) => Some(active),
@@ -2079,14 +2082,18 @@ impl LabController {
             else {
                 continue;
             };
-            if let Err(error) = self
-                .apply_runtime(backend, variant, active.endpoint.clone(), None)
-                .await
-            {
-                warn!(
-                    "Unable to reconcile runtime for {}: {error:#}",
-                    active.backend_id
-                );
+            // AuraGo owns the default ASR service under a stable network alias.
+            // Replacing that URL with a catalog module alias would make it unreachable.
+            if !(active.backend_id == "confucius4-r2t2" && active.container.is_empty()) {
+                if let Err(error) = self
+                    .apply_runtime(backend, variant, active.endpoint.clone(), None)
+                    .await
+                {
+                    warn!(
+                        "Unable to reconcile runtime for {}: {error:#}",
+                        active.backend_id
+                    );
+                }
             }
             if let Err(error) = self
                 .stop_other_stage_containers(backend.stage, &active.container, &active.backend_id)
@@ -2102,6 +2109,37 @@ impl LabController {
         state.asr = asr;
         state.tts = tts;
         state.llm = llm;
+    }
+
+    async fn active_bundled_asr(&self, runtime: &runtime::RuntimeState) -> Option<ActiveBackend> {
+        if !self.docker_control_enabled
+            || !self.hardware.in_container
+            || runtime.asr_id != "confucius4-r2t2"
+            || runtime.cfg.whisper_url.trim_end_matches('/') != "http://confucius-asr:8082"
+        {
+            return None;
+        }
+        let backend = self.catalog.find(&runtime.asr_id)?;
+        let variant = resolve_variant(backend, &self.hardware)?;
+        if !self
+            .client
+            .get("http://confucius-asr:8082/health")
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .ok()?
+            .status()
+            .is_success()
+        {
+            return None;
+        }
+        Some(ActiveBackend {
+            backend_id: backend.id.clone(),
+            variant_id: variant.id.clone(),
+            accelerator: variant.accelerator.clone(),
+            endpoint: runtime.cfg.whisper_url.clone(),
+            container: String::new(),
+        })
     }
 
     async fn find_running_stage(&self, stage: BackendStage) -> Option<ActiveBackend> {
@@ -3821,7 +3859,7 @@ impl LabController {
         }
         if backend.stage == BackendStage::Asr {
             let wav = encode_wav_f32(&vec![0.0; 16_000], 16_000)?;
-            let form = reqwest::multipart::Form::new()
+            let mut form = reqwest::multipart::Form::new()
                 .part(
                     "file",
                     reqwest::multipart::Part::bytes(wav)
@@ -3829,9 +3867,15 @@ impl LabController {
                         .mime_str("audio/wav")?,
                 )
                 .text("language", "de")
-                .text("response_format", "json")
-                .text("no_timestamps", "true");
-            let url = format!("{}/inference", endpoint.trim_end_matches('/'));
+                .text("response_format", "json");
+            let path = if backend.protocol == "openai-asr" {
+                form = form.text("model", backend.model.clone());
+                "/v1/audio/transcriptions"
+            } else {
+                form = form.text("no_timestamps", "true");
+                "/inference"
+            };
+            let url = format!("{}{path}", endpoint.trim_end_matches('/'));
             let response = self
                 .client
                 .post(&url)
@@ -3955,6 +3999,12 @@ impl LabController {
             BackendStage::Asr => {
                 rt.asr_id = backend.id.clone();
                 rt.cfg.whisper_url = endpoint.clone();
+                rt.cfg.stt_api = if variant_protocol(backend, variant) == "openai-asr" {
+                    SttApi::Openai
+                } else {
+                    SttApi::Whisper
+                };
+                rt.cfg.stt_model = backend.model.clone();
             }
             BackendStage::Tts => {
                 rt.tts_id = backend.id.clone();
@@ -5296,6 +5346,56 @@ mod tests {
             lab.status().await.asr.map(|active| active.backend_id),
             Some("asr-b".into())
         );
+    }
+
+    #[tokio::test]
+    async fn reconcile_recognizes_aurago_owned_default_asr() {
+        let app = axum::Router::new().route("/health", axum::routing::get(|| async { "ok" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut cfg = test_config();
+        cfg.whisper_url = "http://confucius-asr:8082".into();
+        cfg.stt_api = SttApi::Openai;
+        let runtime = runtime::runtime_from(cfg);
+        let mut hardware = cpu_hardware();
+        hardware.in_container = true;
+        hardware.platform = "linux".into();
+        let catalog = serde_json::from_str(include_str!("../config/backends.json")).unwrap();
+        let mut lab = LabController::with_control(
+            catalog,
+            hardware,
+            runtime.clone(),
+            Arc::new(FakeControl::default()),
+            true,
+        )
+        .unwrap();
+        lab.client = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::http(format!("http://{address}")).unwrap())
+            .build()
+            .unwrap();
+
+        assert_eq!(runtime.read().await.asr_id, "confucius4-r2t2");
+        assert_eq!(
+            lab.client
+                .get("http://confucius-asr:8082/health")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            reqwest::StatusCode::OK
+        );
+
+        lab.reconcile_active_stack().await;
+
+        let status = lab.status().await;
+        let active = status.asr.unwrap();
+        assert_eq!(active.backend_id, "confucius4-r2t2");
+        assert_eq!(active.variant_id, "confucius4-r2t2-cpu");
+        assert_eq!(active.endpoint, "http://confucius-asr:8082");
+        assert!(active.container.is_empty());
+        assert_eq!(runtime.read().await.cfg.whisper_url, active.endpoint);
+        server.abort();
     }
 
     #[tokio::test]
