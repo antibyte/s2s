@@ -48,6 +48,14 @@ Compose file. The managed profile uses the stable bundled ASR/TTS/LLM images
 and keeps optional model downloads disabled until the Lab UI explicitly starts
 one.
 
+For the signed AuraGo bundle, `S2S_AURAGO_PRESTARTED_CONFUCIUS=1` binds the
+Linux Confucius CPU, CUDA, and Vulkan catalog variants to AuraGo's already
+running `confucius-asr:8082` sidecar. The gateway probes that endpoint for
+availability and does not ask its module controller to provision a second
+Confucius container. Standalone s2s deployments keep their normal managed
+variants. AuraGo passes the selected accelerator and host GPU vendor to the
+gateway so catalog selection matches the running ASR image.
+
 ## Capability profile
 
 Returned by `GET /api/v1/capability` and embedded as `hardware` on the catalog.

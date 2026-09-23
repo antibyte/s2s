@@ -500,9 +500,30 @@ impl BackendCatalog {
         } else {
             EMBEDDED_CATALOG.to_string()
         };
-        let catalog: Self = serde_json::from_str(&raw).context("parse backend catalog")?;
+        let mut catalog: Self = serde_json::from_str(&raw).context("parse backend catalog")?;
+        if env_truthy("S2S_AURAGO_PRESTARTED_CONFUCIUS") {
+            catalog.use_prestarted_confucius()?;
+        }
         catalog.validate()?;
         Ok(catalog)
+    }
+
+    fn use_prestarted_confucius(&mut self) -> Result<()> {
+        let backend = self
+            .backends
+            .iter_mut()
+            .find(|backend| backend.id == "confucius4-r2t2" && backend.stage == BackendStage::Asr)
+            .context("AuraGo prestarted Confucius ASR is missing from the catalog")?;
+        for variant in &mut backend.variants {
+            if variant.platforms.iter().any(|platform| platform == "linux")
+                && !variant.container.is_empty()
+            {
+                variant.endpoint = "http://confucius-asr:8082".into();
+                variant.container.clear();
+                variant.image.clear();
+            }
+        }
+        Ok(())
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -1141,6 +1162,35 @@ mod tests {
     fn embedded_catalog_validates() {
         let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
         catalog.validate().unwrap();
+    }
+
+    #[test]
+    fn aurago_prestarted_confucius_uses_active_asr_for_every_linux_accelerator() {
+        let mut catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        catalog.use_prestarted_confucius().unwrap();
+        catalog.validate().unwrap();
+        let backend = catalog.find("confucius4-r2t2").unwrap();
+        for accelerator in ["cpu", "cuda", "vulkan"] {
+            let variant = backend
+                .variants
+                .iter()
+                .find(|variant| {
+                    variant.accelerator == accelerator && variant.platforms == ["linux"]
+                })
+                .unwrap();
+            assert!(variant.container.is_empty());
+            assert!(variant.image.is_empty());
+            assert_eq!(variant.endpoint, "http://confucius-asr:8082");
+        }
+        assert!(backend
+            .variants
+            .iter()
+            .any(|variant| variant.platforms == ["windows"]
+                && variant.endpoint != "http://confucius-asr:8082"));
+        let regular: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        assert!(!regular.find("confucius4-r2t2").unwrap().variants[0]
+            .container
+            .is_empty());
     }
 
     #[test]

@@ -156,6 +156,9 @@
         "openai",
         "--stt-model",
         "confucius4-r2t2"
+      ],
+      "environment": [
+        "S2S_AURAGO_PRESTARTED_CONFUCIUS=1"
       ]
     },
     {
