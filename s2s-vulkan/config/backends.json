@@ -1300,7 +1300,7 @@
           "stable": true,
           "endpoint": "http://supertonic:8083/v1/audio/speech",
           "native_endpoint": "http://127.0.0.1:8085/v1/audio/speech",
-          "container": "s2s-supertonic",
+          "container": "",
           "image": "s2s-vulkan:local",
           "health_path": "/health",
           "environment": {}
