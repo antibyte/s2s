@@ -146,6 +146,7 @@ let PRESETS = {};
 /** @type {Record<string, any> | null} */
 let CAPABILITY = null;
 let CATALOG_REVISION = "";
+let INITIAL_STACK_READ = false;
 /** @type {Record<string, any> | null} */
 let SUGGESTIONS = null;
 /** Heuristic recommendations from /api/v1/suggestions (not benchmarks). */
@@ -532,6 +533,20 @@ async function loadBackendCatalog({ quiet = false } = {}) {
     if (catalog.hardware && typeof catalog.hardware === "object") {
       CAPABILITY = catalog.hardware;
       renderCapabilityLine();
+    }
+    if (!INITIAL_STACK_READ) {
+      INITIAL_STACK_READ = true;
+      try {
+        const stackResponse = await fetch("/api/v1/stack", { cache: "no-store" });
+        if (!stackResponse.ok) throw new Error(`HTTP ${stackResponse.status}`);
+        const active = (await stackResponse.json()).runtime || {};
+        if (ASR_OPTIONS.some((option) => option.id === active.asr)) lab.asr = active.asr;
+        if (TTS_OPTIONS.some((option) => option.id === active.tts)) lab.tts = active.tts;
+        if (LLM_OPTIONS.some((option) => option.id === active.llm)) lab.llm = active.llm;
+        if (active.voice) lab.voice = active.voice;
+      } catch (error) {
+        log(`Aktiven Stack nicht geladen: ${error.message}`);
+      }
     }
     if (!ASR_OPTIONS.some((option) => option.id === lab.asr)) lab.asr = ASR_OPTIONS[0].id;
     if (!TTS_OPTIONS.some((option) => option.id === lab.tts)) lab.tts = TTS_OPTIONS[0].id;
@@ -2319,7 +2334,6 @@ function connect(opts = {}) {
     log("WebSocket open");
     showToast(wasReconnect && reconnect.hadSession ? copy.toastReconnected : copy.toastConnected);
     reconnect.hadSession = true;
-    sendStackToBackend();
     try {
       await ensureAudio();
     } catch (e) {

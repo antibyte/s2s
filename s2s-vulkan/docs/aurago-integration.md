@@ -60,6 +60,9 @@ service runs on CPU at `llama-fallback:8080`, matching the image healthcheck;
 the gateway uses that existing service for the Linux `local-fallback` catalog
 entry. CUDA hosts still use the prestarted CPU Granite service in the Lab UI.
 Standalone s2s keeps its own LLM variants and ports.
+The Lab browser reads `GET /api/v1/stack` on first load and displays the active
+selection. Opening its WebSocket does not replace that selection with a saved
+browser preference; model clicks still request an explicit stack switch.
 
 ## Capability profile
 
