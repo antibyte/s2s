@@ -197,6 +197,29 @@ jobs:
             docker buildx build --platform linux/amd64 --provenance=true --sbom=false --push \
               -t "ghcr.io/$owner/$repository:$TAG" -f "$dockerfile" "$@" s2s-vulkan
           }
+          if [[ "$GITHUB_REF_NAME" == "v0.2.15-speech-lab" ]]; then
+            # The managed catalog opt-in and browser warning change only the
+            # gateway configuration and Web UI. Reuse signed sidecar images.
+            docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push \
+              -t "ghcr.io/$owner/s2s-web:$TAG" -f s2s-vulkan/web/Dockerfile s2s-vulkan/web
+            previous_tag=sha-69d982905c28ef2a2a614b4a088f6207cd25d62a
+            mapfile -t unchanged_repositories < <(python - <<'PY'
+          import json
+          with open("s2s-vulkan/deploy/speech-lab-bundle.json", encoding="utf-8") as fh:
+              images = json.load(fh)["images"]
+          changed = {"gateway", "web"}
+          for repository in sorted({ref.split("/", 2)[-1].split("@", 1)[0]
+                                    for key, ref in images.items() if key not in changed}):
+              print(repository)
+          PY
+            )
+            for repository in "${unchanged_repositories[@]}"; do
+              docker buildx imagetools create \
+                -t "ghcr.io/$owner/$repository:$TAG" \
+                "ghcr.io/$owner/$repository:$previous_tag"
+            done
+            exit 0
+          fi
           if [[ "$GITHUB_REF_NAME" == "v0.2.14-speech-lab" ]]; then
             # The timeout fix changes the gateway, controller and browser UI.
             # Keep all model sidecars pinned to the signed v0.2.13 release.

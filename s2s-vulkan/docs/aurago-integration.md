@@ -162,7 +162,7 @@ become true.
 | Env | Lab default | AuraGo production |
 |-----|-------------|-------------------|
 | `S2S_LAB_IDLE_UNLOAD_SECS` | `120` | `0` (always warm for chat/SIP) |
-| `S2S_ALLOW_EXPERIMENTAL` | operator choice | `false` for stable-first setup |
+| `S2S_ALLOW_EXPERIMENTAL` | operator choice | `true` in the signed managed bundle; Browser Lab warns before selecting an experimental variant |
 | Bind / network | UI via `:8088` | orchestrator on internal Docker network (`s2s-vulkan:8765`) or loopback-only host overlay |
 
 AuraGo's managed deployment pulls the release asset once after administrator
@@ -183,7 +183,7 @@ Example production snippet:
 
 ```bash
 export S2S_LAB_IDLE_UNLOAD_SECS=0
-export S2S_ALLOW_EXPERIMENTAL=false
+export S2S_ALLOW_EXPERIMENTAL=true
 # docker compose … up -d
 curl -fsS http://s2s-vulkan:8765/ready
 ```

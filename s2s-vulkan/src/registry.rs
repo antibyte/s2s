@@ -1395,6 +1395,20 @@ mod tests {
     }
 
     #[test]
+    fn qwen_amd_vulkan_requires_experimental_opt_in() {
+        let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
+        let backend = catalog.find("qwen3-tts-0.6b").unwrap();
+        let mut hardware = hw("amd", &["cpu", "vulkan"]);
+        assert!(resolve_variant(backend, &hardware).is_none());
+
+        hardware.allow_experimental = true;
+        let selected = resolve_variant(backend, &hardware).unwrap();
+        assert_eq!(selected.id, "qwen3-tts-vulkan");
+        assert!(selected.published);
+        assert!(!selected.stable);
+    }
+
+    #[test]
     fn qwen_selects_preflighted_native_windows_sycl_variant() {
         let catalog: BackendCatalog = serde_json::from_str(EMBEDDED_CATALOG).unwrap();
         let backend = catalog.find("qwen3-tts-0.6b").unwrap();

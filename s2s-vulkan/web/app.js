@@ -136,7 +136,7 @@ const els = {
 /** @typedef {{ cpu: number, gpu: number, vram: number }} ResourceStars */
 /** @typedef {{ show: boolean, cpu: boolean, nvidia: boolean, intel: boolean, amd: boolean, vulkan: boolean }} GpuSupport */
 /** @typedef {{ id: string, label: string }} LanguageLabel */
-/** @typedef {{ id: string, stage: string, name: string, tag: string, desc: string, vramGb: number, stars: ResourceStars, gpuSupport: GpuSupport, languageLabels: LanguageLabel[], meta: string, available?: boolean, compatible: boolean, incompatibilityLabel: string, activatable: boolean, managedRuntime: boolean, variantId: string, installed: boolean, bundled: boolean, downloadState: string, downloadSizeBytes: number, downloadedBytes: number, imageDownloadSizeBytes: number, deletable: boolean, downloadError: string, defaultVoice: string, voices: string[], voiceMode: "request"|"restart"|"fixed", licenses: string[], accessUrl: string, authRequired?: boolean, hfTokenConfigured?: boolean, runtimeState: string, runtimeReason: string, env?: Record<string,string>, note?: string }} EngineOpt */
+/** @typedef {{ id: string, stage: string, name: string, tag: string, desc: string, vramGb: number, stars: ResourceStars, gpuSupport: GpuSupport, languageLabels: LanguageLabel[], meta: string, available?: boolean, compatible: boolean, experimental: boolean, incompatibilityLabel: string, activatable: boolean, managedRuntime: boolean, variantId: string, installed: boolean, bundled: boolean, downloadState: string, downloadSizeBytes: number, downloadedBytes: number, imageDownloadSizeBytes: number, deletable: boolean, downloadError: string, defaultVoice: string, voices: string[], voiceMode: "request"|"restart"|"fixed", licenses: string[], accessUrl: string, authRequired?: boolean, hfTokenConfigured?: boolean, runtimeState: string, runtimeReason: string, env?: Record<string,string>, note?: string }} EngineOpt */
 
 /** Model choices and presets are populated exclusively from /api/v1/catalog. */
 /** @type {EngineOpt[]} */
@@ -484,6 +484,7 @@ function catalogOption(entry) {
     meta: `${entry.model || entry.protocol} · ${accelerator}${hostManaged ? " · Windows host" : ""}`,
     available: activatable && runtimeState !== "unavailable",
     compatible,
+    experimental: compatible && variant?.stable === false,
     incompatibilityLabel,
     activatable,
     managedRuntime: hostManaged || Boolean(variant?.container),
@@ -1298,7 +1299,17 @@ async function ensureModuleReady(opt) {
     showToast("Modell ist nicht im Backend-Katalog vorhanden", { error: true, ms: 2800 });
     return false;
   }
-  if (opt.activatable) return true;
+  const experimentalWarning = opt.experimental
+    ? "Diese Variante ist experimentell. Sie kann instabil sein oder Audiofehler verursachen. "
+    : "";
+  if (opt.activatable) {
+    if (!opt.experimental) return true;
+    return Boolean(await confirmModelAction({
+      title: "Experimentelle Variante aktivieren",
+      message: `${experimentalWarning}Die bisherige Pipeline bleibt bis zum erfolgreichen Wechsel aktiv.`,
+      confirmLabel: "Trotzdem aktivieren",
+    }));
+  }
   if (!opt.compatible) {
     showToast(opt.note || "Auf diesem System ist keine veröffentlichte Variante kompatibel", {
       error: true,
@@ -1315,7 +1326,7 @@ async function ensureModuleReady(opt) {
     const needsHf = Boolean(opt.authRequired || opt.accessUrl);
     const approved = await confirmModelAction({
       title: "Speech-Lab-Modell herunterladen",
-      message: `${opt.name} wird für den Windows-Host installiert. Lizenz: ${opt.licenses.join(" + ") || "siehe Modellkarte"}.`,
+      message: `${experimentalWarning}${opt.name} wird für den Windows-Host installiert. Lizenz: ${opt.licenses.join(" + ") || "siehe Modellkarte"}.`,
       size: `Modell: ${formatModelSize(opt.downloadSizeBytes)}`,
       confirmLabel: "OK · herunterladen",
       hfAuth: needsHf ? { accessUrl: opt.accessUrl || "", tokenConfigured: Boolean(opt.hfTokenConfigured) } : null,
@@ -1342,7 +1353,7 @@ async function ensureModuleReady(opt) {
   const approved = await confirmModelAction({
     title: "Speech-Lab-Modul installieren",
     message:
-      `${opt.name} installiert nur die ausgewählte Variante „${opt.variantId}“.` + licenseNote,
+      `${experimentalWarning}${opt.name} installiert nur die ausgewählte Variante „${opt.variantId}“.` + licenseNote,
     size:
       `Modell: ${formatModelSize(opt.downloadSizeBytes)} · ` +
       `Image: ${formatModelSize(opt.imageDownloadSizeBytes)}`,
@@ -1431,7 +1442,7 @@ function choiceButton(opt, selectedId) {
   const avail = opt.available !== false;
   const downloadOnly = !avail && opt.compatible && opt.managedRuntime && !["unavailable", "needs_configuration", "host_module_delivery_pending"].includes(opt.runtimeState);
   const selectable = avail || downloadOnly;
-  const recommended = isRecommendedOption(opt);
+  const recommended = !opt.experimental && isRecommendedOption(opt);
   return `
     <div class="choice-wrap">
     <button type="button" class="choice choice-select${
@@ -1457,7 +1468,7 @@ function choiceButton(opt, selectedId) {
       <div class="choice-top">
         <span class="choice-name">${opt.name}${
           recommended ? '<span class="choice-rec-badge">Empfohlen</span>' : ""
-        }</span>
+        }${opt.experimental ? '<span class="choice-exp-badge">Experimentell</span>' : ""}</span>
         <span class="choice-tag">${opt.tag}</span>
       </div>
       <div class="choice-desc">${opt.desc}</div>

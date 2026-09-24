@@ -861,6 +861,7 @@ body.lab-open { overflow: hidden; }
   font-weight: 600;
 }
 .choice-rec-badge,
+.choice-exp-badge,
 .chip-rec {
   display: inline-flex;
   align-items: center;
@@ -875,6 +876,11 @@ body.lab-open { overflow: hidden; }
   letter-spacing: 0.04em;
   text-transform: uppercase;
   vertical-align: middle;
+}
+.choice-exp-badge {
+  border-color: rgba(255, 193, 77, 0.45);
+  background: rgba(255, 193, 77, 0.12);
+  color: var(--warn);
 }
 .chip.recommended {
   border-color: rgba(92, 225, 255, 0.55);

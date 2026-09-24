@@ -110,8 +110,10 @@ Downstream recipients must comply with the model license. Faster Whisper remains
 available as an optional catalog backend.
 
 Accelerator resolution is catalog-driven: certified Vulkan first, CUDA on
-NVIDIA, explicit SYCL variants on Intel (Qwen), then CPU. Experimental variants
-remain hidden unless `S2S_ALLOW_EXPERIMENTAL=true`.
+NVIDIA, explicit SYCL variants on Intel (Qwen), then CPU. Published experimental
+variants are selectable when `S2S_ALLOW_EXPERIMENTAL=true`. AuraGo's signed
+managed bundle enables them, and the Browser Lab warns before installation or
+activation. Unpublished runtimes remain unavailable.
 
 ### NVIDIA Parakeet ASR
 

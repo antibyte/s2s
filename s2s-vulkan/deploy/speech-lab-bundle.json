@@ -159,7 +159,8 @@
       ],
       "environment": [
         "S2S_AURAGO_PRESTARTED_CONFUCIUS=1",
-        "S2S_AURAGO_PRESTARTED_LLM=1"
+        "S2S_AURAGO_PRESTARTED_LLM=1",
+        "S2S_ALLOW_EXPERIMENTAL=true"
       ]
     },
     {
