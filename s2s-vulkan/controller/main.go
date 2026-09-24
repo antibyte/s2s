@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -558,12 +559,8 @@ func (c *controller) ensureModule(ctx context.Context, runtime runtimePolicy) er
 		return err
 	}
 	if !available {
-		status, body, err := c.dockerRequest(ctx, http.MethodPost, "/images/create?fromImage="+url.QueryEscape(runtime.Image), nil)
-		if err != nil {
-			return fmt.Errorf("pull runtime image: %w", err)
-		}
-		if status < 200 || status >= 300 {
-			return fmt.Errorf("pull runtime image returned HTTP %d: %s", status, strings.TrimSpace(string(body)))
+		if err := c.pullImage(ctx, runtime.Image); err != nil {
+			return err
 		}
 	}
 	env := make([]string, 0, len(runtime.Environment))
@@ -745,6 +742,51 @@ func (c *controller) dockerRequest(ctx context.Context, method, path string, bod
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	return resp.StatusCode, data, err
+}
+
+func (c *controller) pullImage(ctx context.Context, image string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker/"+dockerAPIVer+"/images/create?fromImage="+url.QueryEscape(image), nil)
+	if err != nil {
+		return fmt.Errorf("prepare runtime image pull: %w", err)
+	}
+	resp, err := c.docker.Do(req)
+	if err != nil {
+		return fmt.Errorf("pull runtime image: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<10))
+		return fmt.Errorf("pull runtime image returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	// Docker sends a stream of JSON events. Read it to EOF so a long pull is
+	// not silently treated as complete after the ordinary response-size cap.
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64<<10), 1<<20)
+	for scanner.Scan() {
+		if len(scanner.Bytes()) == 0 {
+			continue
+		}
+		var event struct {
+			Error       string `json:"error"`
+			ErrorDetail struct {
+				Message string `json:"message"`
+			} `json:"errorDetail"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			return fmt.Errorf("decode runtime image pull: %w", err)
+		}
+		message := strings.TrimSpace(event.Error)
+		if message == "" {
+			message = strings.TrimSpace(event.ErrorDetail.Message)
+		}
+		if message != "" {
+			return fmt.Errorf("pull runtime image: %s", message)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read runtime image pull: %w", err)
+	}
+	return nil
 }
 
 func writeDockerError(w http.ResponseWriter, status int, body []byte) {

@@ -197,6 +197,30 @@ jobs:
             docker buildx build --platform linux/amd64 --provenance=true --sbom=false --push \
               -t "ghcr.io/$owner/$repository:$TAG" -f "$dockerfile" "$@" s2s-vulkan
           }
+          if [[ "$GITHUB_REF_NAME" == "v0.2.14-speech-lab" ]]; then
+            # The timeout fix changes the gateway, controller and browser UI.
+            # Keep all model sidecars pinned to the signed v0.2.13 release.
+            build s2s-speech-lab-controller s2s-vulkan/docker/Dockerfile.controller
+            docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push \
+              -t "ghcr.io/$owner/s2s-web:$TAG" -f s2s-vulkan/web/Dockerfile s2s-vulkan/web
+            previous_tag=sha-f0bf434c2fed302a55198f7083be27a8fecfba17
+            mapfile -t unchanged_repositories < <(python - <<'PY'
+          import json
+          with open("s2s-vulkan/deploy/speech-lab-bundle.json", encoding="utf-8") as fh:
+              images = json.load(fh)["images"]
+          changed = {"gateway", "controller", "web"}
+          for repository in sorted({ref.split("/", 2)[-1].split("@", 1)[0]
+                                    for key, ref in images.items() if key not in changed}):
+              print(repository)
+          PY
+            )
+            for repository in "${unchanged_repositories[@]}"; do
+              docker buildx imagetools create \
+                -t "ghcr.io/$owner/$repository:$TAG" \
+                "ghcr.io/$owner/$repository:$previous_tag"
+            done
+            exit 0
+          fi
           if [[ "$GITHUB_REF_NAME" == "v0.2.13-speech-lab" ]]; then
             # The gateway, browser UI, and Whisper source changed since the
             # signed v0.2.10 bundle. Preserve every unchanged pinned sidecar.

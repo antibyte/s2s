@@ -136,7 +136,7 @@ const els = {
 /** @typedef {{ cpu: number, gpu: number, vram: number }} ResourceStars */
 /** @typedef {{ show: boolean, cpu: boolean, nvidia: boolean, intel: boolean, amd: boolean, vulkan: boolean }} GpuSupport */
 /** @typedef {{ id: string, label: string }} LanguageLabel */
-/** @typedef {{ id: string, stage: string, name: string, tag: string, desc: string, vramGb: number, stars: ResourceStars, gpuSupport: GpuSupport, languageLabels: LanguageLabel[], meta: string, available?: boolean, compatible: boolean, activatable: boolean, managedRuntime: boolean, variantId: string, installed: boolean, bundled: boolean, downloadState: string, downloadSizeBytes: number, downloadedBytes: number, imageDownloadSizeBytes: number, deletable: boolean, downloadError: string, defaultVoice: string, voices: string[], voiceMode: "request"|"restart"|"fixed", licenses: string[], accessUrl: string, authRequired?: boolean, hfTokenConfigured?: boolean, runtimeState: string, runtimeReason: string, env?: Record<string,string>, note?: string }} EngineOpt */
+/** @typedef {{ id: string, stage: string, name: string, tag: string, desc: string, vramGb: number, stars: ResourceStars, gpuSupport: GpuSupport, languageLabels: LanguageLabel[], meta: string, available?: boolean, compatible: boolean, incompatibilityLabel: string, activatable: boolean, managedRuntime: boolean, variantId: string, installed: boolean, bundled: boolean, downloadState: string, downloadSizeBytes: number, downloadedBytes: number, imageDownloadSizeBytes: number, deletable: boolean, downloadError: string, defaultVoice: string, voices: string[], voiceMode: "request"|"restart"|"fixed", licenses: string[], accessUrl: string, authRequired?: boolean, hfTokenConfigured?: boolean, runtimeState: string, runtimeReason: string, env?: Record<string,string>, note?: string }} EngineOpt */
 
 /** Model choices and presets are populated exclusively from /api/v1/catalog. */
 /** @type {EngineOpt[]} */
@@ -446,11 +446,20 @@ function catalogOption(entry) {
   const hfTokenConfigured = entry.hf_token_configured === true;
   const compatible = entry.compatible !== undefined ? entry.compatible === true : entry.available === true;
   const activatable = entry.activatable !== undefined ? entry.activatable === true : entry.available === true;
+  const reason = String(entry.reason || "").trim();
+  const platform = /^not supported on ([a-z0-9_-]+)$/i.exec(reason)?.[1];
+  const incompatibilityLabel = platform
+    ? `Keine Variante für ${platform === "linux" ? "Linux" : platform === "windows" ? "Windows" : platform} verfügbar`
+    : reason === "only experimental variants are registered"
+      ? "Nur experimentelle Varianten verfügbar"
+      : reason.startsWith("no compatible variant for ")
+        ? "Keine passende Variante für diese Hardware verfügbar"
+        : "Auf diesem System nicht verfügbar";
   const stateNote = runtimeReason
     ? `Host-Agent: ${runtimeReason}`
     : compatible
       ? `${variant.id}${variant.stable ? "" : " · experimental"}${hostManaged ? ` · ${runtimeState}` : ""}`
-      : entry.reason || "Auf diesem System nicht verfügbar";
+      : incompatibilityLabel;
   const accessNote = licenses.length
     ? `Lizenz: ${licenses.join(" + ")}${authRequired ? " · HF-Zugang erforderlich" : ""}`
     : authRequired
@@ -475,6 +484,7 @@ function catalogOption(entry) {
     meta: `${entry.model || entry.protocol} · ${accelerator}${hostManaged ? " · Windows host" : ""}`,
     available: activatable && runtimeState !== "unavailable",
     compatible,
+    incompatibilityLabel,
     activatable,
     managedRuntime: hostManaged || Boolean(variant?.container),
     variantId: entry.variant_id || variant?.id || "",
@@ -1199,7 +1209,11 @@ async function waitForModelDownload(opt) {
 async function waitForModuleInstall(opt) {
   if (!els.modelDialog) return false;
   resetModelDialog();
-  const token = { backendId: opt.id, cancelled: false };
+  const token = {
+    backendId: opt.id,
+    cancelled: false,
+    maxDownloaded: Math.max(0, Number(opt.downloadedBytes || 0)),
+  };
   activeModelDownload = token;
   const totalBytes = opt.downloadSizeBytes + opt.imageDownloadSizeBytes;
   els.modelDialogTitle.textContent = `${opt.name} wird installiert`;
@@ -1210,7 +1224,7 @@ async function waitForModuleInstall(opt) {
   els.modelProgress.hidden = false;
   els.modelDialogConfirm.hidden = true;
   els.modelDialogCancel.textContent = "Installation abbrechen";
-  setModelDialogProgress(opt.downloadedBytes, totalBytes);
+  setModelDialogProgress(token.maxDownloaded, totalBytes);
   if (!els.modelDialog.open) els.modelDialog.showModal();
   els.modelDialog.oncancel = (event) => event.preventDefault();
   els.modelDialogCancel.onclick = async () => {
@@ -1235,9 +1249,18 @@ async function waitForModuleInstall(opt) {
       const current = await apiRequest(`/api/v1/modules/${encodeURIComponent(opt.id)}/install`);
       const downloaded = Number(current.model_downloaded_bytes || 0) +
         Number(current.image_downloaded_bytes || 0);
-      const total = Number(current.model_total_bytes || 0) +
+      const total = totalBytes || Number(current.model_total_bytes || 0) +
         Number(current.image_download_size_bytes || 0);
-      setModelDialogProgress(downloaded, total || totalBytes);
+      token.maxDownloaded = Math.max(token.maxDownloaded, Math.min(downloaded, total));
+      setModelDialogProgress(token.maxDownloaded, total);
+      if (current.model_state === "installed" && current.runtime_state === "missing") {
+        els.modelDialogCopy.textContent =
+          "Modell installiert. Das signierte Laufzeit-Image wird vorbereitet und geladen. Die aktive Pipeline bleibt unverändert.";
+        if (els.modelProgressLabel) {
+          els.modelProgressLabel.textContent =
+            `Modell geladen: ${formatBytes(Number(current.model_downloaded_bytes || 0))} · Laufzeit-Image wird geladen`;
+        }
+      }
       if (current.state === "ready") {
         if (els.modelDialog.open) els.modelDialog.close();
         await loadBackendCatalog({ quiet: true });
@@ -1375,6 +1398,7 @@ async function deleteInstalledModel(opt) {
 }
 
 function modelStatus(opt) {
+  if (!opt.compatible) return opt.incompatibilityLabel || "Auf diesem System nicht verfügbar";
   if (opt.activatable) {
     return `Bereit · Modell ${formatModelSize(opt.downloadSizeBytes)} · Image ${formatModelSize(opt.imageDownloadSizeBytes)}`;
   }
@@ -1406,6 +1430,7 @@ function choiceButton(opt, selectedId) {
   const sel = opt.id === selectedId;
   const avail = opt.available !== false;
   const downloadOnly = !avail && opt.compatible && opt.managedRuntime && !["unavailable", "needs_configuration", "host_module_delivery_pending"].includes(opt.runtimeState);
+  const selectable = avail || downloadOnly;
   const recommended = isRecommendedOption(opt);
   return `
     <div class="choice-wrap">
@@ -1417,6 +1442,7 @@ function choiceButton(opt, selectedId) {
       data-available="${avail ? "true" : "false"}"
       data-compatible="${opt.compatible ? "true" : "false"}"
       data-installed="${opt.installed ? "true" : "false"}"
+      ${selectable ? "" : "disabled aria-disabled=\"true\""}
       ${
         avail
           ? recommended
@@ -1453,7 +1479,8 @@ function choiceButton(opt, selectedId) {
 
 function renderChoices(container, options, selectedId, onPick) {
   if (!container) return;
-  container.innerHTML = options.map((o) => choiceButton(o, selectedId)).join("");
+  const ordered = [...options].sort((a, b) => Number(b.compatible) - Number(a.compatible));
+  container.innerHTML = ordered.map((o) => choiceButton(o, selectedId)).join("");
   container.querySelectorAll(".choice-select").forEach((btn) => {
     btn.addEventListener("click", async () => {
       if (btn.dataset.available === "false" && btn.dataset.compatible !== "true") {

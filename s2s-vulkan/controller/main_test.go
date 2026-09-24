@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -198,6 +199,52 @@ func TestInstallReusesExactImmutableImage(t *testing.T) {
 	}
 	if pulled {
 		t.Fatal("already-present immutable image was pulled again")
+	}
+}
+
+func TestInstallReportsDockerPullErrorAfterLargeProgressStream(t *testing.T) {
+	created := false
+	progress := strings.Repeat("{\"status\":\"Downloading\"}\n", 1000)
+	docker := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/containers/s2s-parakeet-cpu/json"):
+			http.NotFound(w, r)
+		case strings.Contains(r.URL.Path, "/images/") && strings.HasSuffix(r.URL.Path, "/json"):
+			http.NotFound(w, r)
+		case strings.HasSuffix(r.URL.Path, "/images/create"):
+			for i := 0; i < 700; i++ {
+				_, _ = io.WriteString(w, progress)
+			}
+			_, _ = io.WriteString(w, "{\"error\":\"registry refused pull\"}\n")
+		case strings.HasSuffix(r.URL.Path, "/containers/create"):
+			created = true
+			w.WriteHeader(http.StatusCreated)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	c := testController(t, docker)
+	server := httptest.NewServer(c.routes())
+	defer server.Close()
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/s2s/modules/parakeet-cpu/install", nil)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("install status = %d, want conflict", resp.StatusCode)
+	}
+	var result map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result["error"], "registry refused pull") {
+		t.Fatalf("late pull error not reported: %q", result["error"])
+	}
+	if created {
+		t.Fatal("runtime container created after Docker pull error")
 	}
 }
 

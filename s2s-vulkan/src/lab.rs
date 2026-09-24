@@ -616,6 +616,9 @@ impl ContainerControl for DockerProxyControl {
         );
         let response = self
             .request(reqwest::Method::POST, &url)
+            // Pulling a multi-GB runtime image can take much longer than the
+            // 20-second timeout used for ordinary controller operations.
+            .timeout(Duration::from_secs(2 * 60 * 60))
             .send()
             .await
             .with_context(|| format!("controller POST {url}"))?;
@@ -4656,6 +4659,32 @@ mod tests {
     use crate::config::Config;
     use clap::Parser;
     use std::collections::BTreeMap;
+
+    #[tokio::test]
+    async fn runtime_install_can_outlive_the_regular_controller_timeout() {
+        let app = axum::Router::new().route(
+            "/s2s/modules/test/install",
+            axum::routing::post(|| async {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                axum::Json(serde_json::json!({"state": "ready"}))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let control = DockerProxyControl {
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_millis(10))
+                .build()
+                .unwrap(),
+            base_url: format!("http://{address}"),
+            token: None,
+        };
+
+        let status = control.install("test").await.unwrap();
+        assert_eq!(status.state, "ready");
+        server.abort();
+    }
 
     #[derive(Default)]
     struct FakeControl {
