@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -84,6 +85,8 @@ type controller struct {
 	modelsVolume string
 	dataVolume   string
 	bundleDigest string
+	pullMu       sync.RWMutex
+	imagePulls   map[string]int64
 }
 
 type dockerInspect struct {
@@ -490,12 +493,22 @@ func (c *controller) getModule(w http.ResponseWriter, r *http.Request) {
 			state = "running"
 		}
 	}
+	c.pullMu.RLock()
+	downloaded := c.imagePulls[runtime.Image]
+	c.pullMu.RUnlock()
+	if state == "ready" || state == "running" {
+		downloaded = runtime.ImageDownloadSizeBytes
+	}
+	if runtime.ImageDownloadSizeBytes > 0 && downloaded > runtime.ImageDownloadSizeBytes {
+		downloaded = runtime.ImageDownloadSizeBytes
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"variant_id":                runtime.VariantID,
 		"container":                 runtime.Container,
 		"state":                     state,
 		"image":                     runtime.Image,
 		"image_download_size_bytes": runtime.ImageDownloadSizeBytes,
+		"image_downloaded_bytes":    downloaded,
 	})
 }
 
@@ -745,6 +758,12 @@ func (c *controller) dockerRequest(ctx context.Context, method, path string, bod
 }
 
 func (c *controller) pullImage(ctx context.Context, image string) error {
+	c.pullMu.Lock()
+	if c.imagePulls == nil {
+		c.imagePulls = make(map[string]int64)
+	}
+	c.imagePulls[image] = 0
+	c.pullMu.Unlock()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker/"+dockerAPIVer+"/images/create?fromImage="+url.QueryEscape(image), nil)
 	if err != nil {
 		return fmt.Errorf("prepare runtime image pull: %w", err)
@@ -762,12 +781,19 @@ func (c *controller) pullImage(ctx context.Context, image string) error {
 	// not silently treated as complete after the ordinary response-size cap.
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64<<10), 1<<20)
+	layers := make(map[string]dockerLayerProgress)
 	for scanner.Scan() {
 		if len(scanner.Bytes()) == 0 {
 			continue
 		}
 		var event struct {
-			Error       string `json:"error"`
+			Error          string `json:"error"`
+			ID             string `json:"id"`
+			Status         string `json:"status"`
+			ProgressDetail struct {
+				Current int64 `json:"current"`
+				Total   int64 `json:"total"`
+			} `json:"progressDetail"`
 			ErrorDetail struct {
 				Message string `json:"message"`
 			} `json:"errorDetail"`
@@ -782,11 +808,48 @@ func (c *controller) pullImage(ctx context.Context, image string) error {
 		if message != "" {
 			return fmt.Errorf("pull runtime image: %s", message)
 		}
+		if downloaded := updateDockerLayerProgress(layers, event.ID, event.Status, event.ProgressDetail.Current, event.ProgressDetail.Total); downloaded >= 0 {
+			c.pullMu.Lock()
+			if downloaded > c.imagePulls[image] {
+				c.imagePulls[image] = downloaded
+			}
+			c.pullMu.Unlock()
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("read runtime image pull: %w", err)
 	}
 	return nil
+}
+
+type dockerLayerProgress struct {
+	current int64
+	total   int64
+}
+
+func updateDockerLayerProgress(layers map[string]dockerLayerProgress, id, status string, current, total int64) int64 {
+	if id == "" {
+		return -1
+	}
+	state := layers[id]
+	if strings.EqualFold(status, "Download complete") || strings.EqualFold(status, "Pull complete") {
+		state.current = state.total
+	} else if strings.EqualFold(status, "Downloading") && total > 0 {
+		if current > state.current {
+			state.current = current
+		}
+		if total > state.total {
+			state.total = total
+		}
+	} else {
+		return -1
+	}
+	layers[id] = state
+	var downloaded int64
+	for _, layer := range layers {
+		downloaded += layer.current
+	}
+	return downloaded
 }
 
 func writeDockerError(w http.ResponseWriter, status int, body []byte) {

@@ -33,6 +33,95 @@ func testController(t *testing.T, docker http.Handler) *controller {
 	}
 }
 
+func TestDockerLayerProgressDeduplicatesEvents(t *testing.T) {
+	layers := make(map[string]dockerLayerProgress)
+	steps := []struct {
+		id, status           string
+		current, total, want int64
+	}{
+		{"layer-a", "Downloading", 40, 100, 40},
+		{"layer-b", "Downloading", 20, 50, 60},
+		{"layer-a", "Downloading", 30, 100, 60},
+		{"layer-a", "Download complete", 0, 0, 120},
+		{"layer-b", "Downloading", 50, 50, 150},
+	}
+	for _, step := range steps {
+		if got := updateDockerLayerProgress(layers, step.id, step.status, step.current, step.total); got != step.want {
+			t.Fatalf("layer progress = %d, want %d", got, step.want)
+		}
+	}
+}
+
+func TestModuleStatusReportsImagePullBytes(t *testing.T) {
+	c := testController(t, http.NotFoundHandler())
+	runtime := c.byVariant["parakeet-cpu"]
+	runtime.ImageDownloadSizeBytes = 100
+	c.byVariant[runtime.VariantID] = runtime
+	c.imagePulls = map[string]int64{runtime.Image: 42}
+	server := httptest.NewServer(c.routes())
+	defer server.Close()
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/s2s/modules/parakeet-cpu", nil)
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var status struct {
+		ImageDownloadedBytes int64 `json:"image_downloaded_bytes"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status.ImageDownloadedBytes != 42 {
+		t.Fatalf("image bytes = %d, want 42", status.ImageDownloadedBytes)
+	}
+}
+
+func TestRuntimeImagePullPublishesLiveBytes(t *testing.T) {
+	firstEvent := make(chan struct{})
+	release := make(chan struct{})
+	docker := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/images/create") {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, "{\"id\":\"layer-a\",\"status\":\"Downloading\",\"progressDetail\":{\"current\":42,\"total\":100}}\n")
+		w.(http.Flusher).Flush()
+		close(firstEvent)
+		<-release
+		_, _ = io.WriteString(w, "{\"id\":\"layer-a\",\"status\":\"Download complete\"}\n")
+	})
+	c := testController(t, docker)
+	image := c.byVariant["parakeet-cpu"].Image
+	done := make(chan error, 1)
+	go func() { done <- c.pullImage(context.Background(), image) }()
+	select {
+	case <-firstEvent:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("Docker pull did not stream its first event")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		c.pullMu.RLock()
+		loaded := c.imagePulls[image]
+		c.pullMu.RUnlock()
+		if loaded == 42 {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(release)
+			t.Fatalf("live image bytes = %d, want 42", loaded)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWaitForExistingTokenHandlesInitRace(t *testing.T) {
 	path := t.TempDir() + "/token"
 	go func() {

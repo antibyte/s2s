@@ -197,6 +197,30 @@ jobs:
             docker buildx build --platform linux/amd64 --provenance=true --sbom=false --push \
               -t "ghcr.io/$owner/$repository:$TAG" -f "$dockerfile" "$@" s2s-vulkan
           }
+          if [[ "$GITHUB_REF_NAME" == "v0.2.16-speech-lab" ]]; then
+            # Image progress changes the controller, gateway and browser UI.
+            # Reuse the model sidecars from the previous signed bundle.
+            build s2s-speech-lab-controller s2s-vulkan/docker/Dockerfile.controller
+            docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push \
+              -t "ghcr.io/$owner/s2s-web:$TAG" -f s2s-vulkan/web/Dockerfile s2s-vulkan/web
+            previous_tag=sha-a3703346c2d83414c4ffc0a2102150e40dec0cd8
+            mapfile -t unchanged_repositories < <(python - <<'PY'
+          import json
+          with open("s2s-vulkan/deploy/speech-lab-bundle.json", encoding="utf-8") as fh:
+              images = json.load(fh)["images"]
+          changed = {"gateway", "controller", "web"}
+          for repository in sorted({ref.split("/", 2)[-1].split("@", 1)[0]
+                                    for key, ref in images.items() if key not in changed}):
+              print(repository)
+          PY
+            )
+            for repository in "${unchanged_repositories[@]}"; do
+              docker buildx imagetools create \
+                -t "ghcr.io/$owner/$repository:$TAG" \
+                "ghcr.io/$owner/$repository:$previous_tag"
+            done
+            exit 0
+          fi
           if [[ "$GITHUB_REF_NAME" == "v0.2.15-speech-lab" ]]; then
             # The managed catalog opt-in and browser warning change only the
             # gateway configuration and Web UI. Reuse signed sidecar images.

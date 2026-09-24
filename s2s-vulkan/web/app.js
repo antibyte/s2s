@@ -1134,7 +1134,7 @@ let activeModelDownload = null;
 async function waitForModelDownload(opt) {
   if (!els.modelDialog) return false;
   resetModelDialog();
-  const token = { backendId: opt.id, cancelled: false };
+  const token = { backendId: opt.id, cancelled: false, maxDownloaded: Math.max(0, Number(opt.downloadedBytes || 0)), totalBytes: opt.downloadSizeBytes };
   activeModelDownload = token;
   els.modelDialogTitle.textContent = `${opt.name} wird heruntergeladen`;
   els.modelDialogCopy.textContent =
@@ -1143,7 +1143,7 @@ async function waitForModelDownload(opt) {
   els.modelProgress.hidden = false;
   els.modelDialogConfirm.hidden = true;
   els.modelDialogCancel.textContent = "Download abbrechen";
-  setModelDialogProgress(opt.downloadedBytes, opt.downloadSizeBytes);
+  setModelDialogProgress(token.maxDownloaded, token.totalBytes);
   if (!els.modelDialog.open) els.modelDialog.showModal();
 
   els.modelDialog.oncancel = (event) => event.preventDefault();
@@ -1170,7 +1170,8 @@ async function waitForModelDownload(opt) {
       await loadBackendCatalog({ quiet: true });
       const current = allModelOptions().find((item) => item.id === opt.id);
       if (!current) throw new Error("Modell ist nicht mehr im Katalog vorhanden.");
-      setModelDialogProgress(current.downloadedBytes, current.downloadSizeBytes);
+      token.maxDownloaded = Math.max(token.maxDownloaded, Number(current.downloadedBytes || 0));
+      setModelDialogProgress(token.maxDownloaded, token.totalBytes);
       if (current.installed || current.downloadState === "installed") {
         if (els.modelDialog.open) els.modelDialog.close();
         showToast(`${current.name} ist installiert`);
@@ -1214,9 +1215,10 @@ async function waitForModuleInstall(opt) {
     backendId: opt.id,
     cancelled: false,
     maxDownloaded: Math.max(0, Number(opt.downloadedBytes || 0)),
+    modelBytes: opt.downloadSizeBytes,
+    totalBytes: opt.downloadSizeBytes + opt.imageDownloadSizeBytes,
   };
   activeModelDownload = token;
-  const totalBytes = opt.downloadSizeBytes + opt.imageDownloadSizeBytes;
   els.modelDialogTitle.textContent = `${opt.name} wird installiert`;
   els.modelDialogCopy.textContent =
     "Modell und signierte Laufzeit werden fortsetzbar installiert. Die aktive Pipeline bleibt bis zur erfolgreichen Aktivierung unverändert.";
@@ -1225,7 +1227,7 @@ async function waitForModuleInstall(opt) {
   els.modelProgress.hidden = false;
   els.modelDialogConfirm.hidden = true;
   els.modelDialogCancel.textContent = "Installation abbrechen";
-  setModelDialogProgress(token.maxDownloaded, totalBytes);
+  setModelDialogProgress(token.maxDownloaded, token.totalBytes);
   if (!els.modelDialog.open) els.modelDialog.showModal();
   els.modelDialog.oncancel = (event) => event.preventDefault();
   els.modelDialogCancel.onclick = async () => {
@@ -1250,16 +1252,20 @@ async function waitForModuleInstall(opt) {
       const current = await apiRequest(`/api/v1/modules/${encodeURIComponent(opt.id)}/install`);
       const downloaded = Number(current.model_downloaded_bytes || 0) +
         Number(current.image_downloaded_bytes || 0);
-      const total = totalBytes || Number(current.model_total_bytes || 0) +
-        Number(current.image_download_size_bytes || 0);
-      token.maxDownloaded = Math.max(token.maxDownloaded, Math.min(downloaded, total));
-      setModelDialogProgress(token.maxDownloaded, total);
+      if (!token.totalBytes) {
+        token.totalBytes = Number(current.model_total_bytes || 0) + Number(current.image_download_size_bytes || 0);
+      }
+      token.maxDownloaded = Math.max(token.maxDownloaded, Math.min(downloaded, token.totalBytes));
+      setModelDialogProgress(token.maxDownloaded, token.totalBytes);
       if (current.model_state === "installed" && current.runtime_state === "missing") {
+        token.imagePhase = true;
         els.modelDialogCopy.textContent =
           "Modell installiert. Das signierte Laufzeit-Image wird vorbereitet und geladen. Die aktive Pipeline bleibt unverändert.";
         if (els.modelProgressLabel) {
-          els.modelProgressLabel.textContent =
-            `Modell geladen: ${formatBytes(Number(current.model_downloaded_bytes || 0))} · Laufzeit-Image wird geladen`;
+          const imageLoaded = Number(current.image_downloaded_bytes || 0);
+          els.modelProgressLabel.textContent = imageLoaded > 0
+            ? `Modell geladen: ${formatBytes(Number(current.model_downloaded_bytes || 0))} · Image: ${formatBytes(imageLoaded)} / ${formatBytes(opt.imageDownloadSizeBytes)}`
+            : `Modell geladen: ${formatBytes(Number(current.model_downloaded_bytes || 0))} · Laufzeit-Image wird vorbereitet`;
         }
       }
       if (current.state === "ready") {
@@ -2538,8 +2544,11 @@ function handlePipelineEvent(raw) {
   if (type === "download_progress") {
     const total = Number(msg.total || 0);
     const percent = total > 0 ? Math.round((Number(msg.downloaded || 0) / total) * 100) : 0;
-    if (activeModelDownload?.backendId === msg.backend_id) {
-      setModelDialogProgress(Number(msg.downloaded || 0), total);
+    if (activeModelDownload?.backendId === msg.backend_id && !activeModelDownload.imagePhase) {
+      const token = activeModelDownload;
+      const modelDownloaded = Math.min(Number(msg.downloaded || 0), token.modelBytes || total);
+      token.maxDownloaded = Math.max(token.maxDownloaded, modelDownloaded);
+      setModelDialogProgress(token.maxDownloaded, token.totalBytes || total);
     }
     setHint(`Download ${msg.artifact || msg.backend_id}: ${percent}%`, { sticky: true });
     return;

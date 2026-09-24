@@ -270,6 +270,8 @@ pub struct RuntimeProvisionStatus {
     #[serde(default)]
     pub image_download_size_bytes: u64,
     #[serde(default)]
+    pub image_downloaded_bytes: u64,
+    #[serde(default)]
     pub error: String,
 }
 
@@ -1589,7 +1591,9 @@ impl LabController {
         let image_downloaded_bytes = if matches!(runtime.state.as_str(), "ready" | "running") {
             image_download_size_bytes
         } else {
-            0
+            runtime
+                .image_downloaded_bytes
+                .min(image_download_size_bytes)
         };
         Ok(ModuleStatusResponse {
             operation_id,
@@ -5035,6 +5039,16 @@ mod tests {
             provisioned_image(&RuntimeProvisionStatus::default(), "registry/asr:cpu"),
             "registry/asr:cpu"
         );
+    }
+
+    #[test]
+    fn controller_image_progress_survives_gateway_status_decode() {
+        let status: RuntimeProvisionStatus = serde_json::from_str(
+            r#"{"state":"missing","image_download_size_bytes":100,"image_downloaded_bytes":42}"#,
+        )
+        .unwrap();
+        assert_eq!(status.image_downloaded_bytes, 42);
+        assert_eq!(status.image_download_size_bytes, 100);
     }
 
     #[tokio::test]

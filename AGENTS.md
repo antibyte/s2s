@@ -42,3 +42,9 @@ This project is indexed by GitNexus as **s2s** (1337 symbols, 3484 relationships
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+## Speech Lab Runtime Progress
+
+- Module installation status reports model bytes and Docker image bytes separately. The controller deduplicates pull events by layer and publishes increasing image bytes while the pull is active; the gateway carries these bytes through `/api/v1/modules/{backend_id}/install`.
+- The Browser Lab uses one stable total for model plus image installation and never moves its displayed progress backward when WebSocket and polling updates arrive out of order. During image preparation it shows image bytes when Docker reports them.
+- Verify changes with `go test ./...` in `s2s-vulkan/controller`, `cargo check --tests`, and `node --check s2s-vulkan/web/app.js`.
