@@ -14,7 +14,8 @@ use anyhow::{Context, Result};
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{Path, Query, Request, State, WebSocketUpgrade};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -24,7 +25,6 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tower_http::cors::CorsLayer;
 use tracing::{error, info, warn};
 
 const MAX_ASR_WAV_BYTES: usize = 8 * 1024 * 1024;
@@ -95,7 +95,7 @@ pub async fn run_websocket_server(cfg: Config, gpu_report: GpuReport) -> Result<
             "/api/v1/benchmarks/{id}/ratings",
             post(post_benchmark_rating),
         )
-        .layer(CorsLayer::permissive())
+        .layer(middleware::from_fn(browser_origin_guard))
         .with_state(state);
 
     info!(
@@ -104,6 +104,36 @@ pub async fn run_websocket_server(cfg: Config, gpu_report: GpuReport) -> Result<
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+// The local lab has no browser credentials. Reject cross-origin browser calls
+// so another site cannot drive its stack or WebSocket through localhost.
+async fn browser_origin_guard(request: Request, next: Next) -> Response {
+    if !valid_browser_origin(request.headers()) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(request).await
+}
+
+fn valid_browser_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return true;
+    };
+    origin
+        .to_str()
+        .ok()
+        .and_then(|value| value.parse::<Uri>().ok())
+        .filter(|uri| matches!(uri.scheme_str(), Some("http" | "https")))
+        .and_then(|uri| {
+            uri.authority()
+                .map(|authority| authority.as_str().to_owned())
+        })
+        .zip(
+            headers
+                .get(header::HOST)
+                .and_then(|value| value.to_str().ok()),
+        )
+        .is_some_and(|(origin_host, host)| origin_host.eq_ignore_ascii_case(host))
 }
 
 async fn get_health() -> impl IntoResponse {
@@ -927,6 +957,28 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_origin_matches_exact_host_and_port() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("localhost:8088"));
+        assert!(valid_browser_origin(&headers));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://localhost:8088"),
+        );
+        assert!(valid_browser_origin(&headers));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://evil.test"),
+        );
+        assert!(!valid_browser_origin(&headers));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://localhost:8765"),
+        );
+        assert!(!valid_browser_origin(&headers));
+    }
 
     fn pcm_wav() -> Vec<u8> {
         let mut bytes = Vec::new();

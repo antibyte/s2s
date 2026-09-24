@@ -4,6 +4,9 @@
  */
 
 const SAMPLE_RATE = 16000;
+// The same build runs at / locally and below AuraGo's /speech-lab/ proxy.
+const LAB_BASE_PATH = new URL('.', import.meta.url).pathname;
+const labPath = (path) => LAB_BASE_PATH + String(path || '').replace(/^\/+/, '');
 const FRAME_MS = 40;
 const FRAME_SAMPLES = (SAMPLE_RATE * FRAME_MS) / 1000;
 const VRAM_BUDGET_GB = 8;
@@ -208,7 +211,7 @@ async function loadSuggestions({ quiet = false } = {}) {
   try {
     const lang = encodeURIComponent(suggestionLanguage());
     const response = await fetch(
-      `/api/v1/suggestions?language=${lang}&stable_only=true&limit=8`,
+      labPath(`/api/v1/suggestions?language=${lang}&stable_only=true&limit=8`),
       { cache: "no-store" }
     );
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -501,7 +504,7 @@ function catalogOption(entry) {
 
 async function loadBackendCatalog({ quiet = false } = {}) {
   try {
-    const response = await fetch("/api/v1/catalog", { cache: "no-store" });
+    const response = await fetch(labPath("/api/v1/catalog"), { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const catalog = await response.json();
     if (![1, 2].includes(catalog.schema_version) || !Array.isArray(catalog.backends)) {
@@ -904,7 +907,7 @@ async function sendStackToBackend({ voiceOnly = false } = {}) {
   // Restart-backed voices lock the picker while their sidecar is replaced.
   setSwapBusy(true, { lockVoice: !voiceOnly || activeTts?.voiceMode === "restart" });
   try {
-    const response = await fetch("/api/v1/stack", {
+    const response = await fetch(labPath("/api/v1/stack"), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -965,7 +968,7 @@ function formatModelSize(bytes) {
 }
 
 async function apiRequest(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(String(url).startsWith('/api/') ? labPath(url) : url, options);
   if (response.ok) return response.status === 204 ? null : response.json();
   let message = `HTTP ${response.status}`;
   try {
@@ -1692,9 +1695,10 @@ function setBadge(el, text, isWarn, soft) {
 // ── Init defaults ───────────────────────────────────────────────────
 const params = new URLSearchParams(location.search);
 function defaultWsUrl() {
-  if (params.get("ws")) return params.get("ws");
   const scheme = location.protocol === "https:" ? "wss" : "ws";
-  const sameOrigin = `${scheme}://${location.host}/ws`;
+  const sameOrigin = `${scheme}://${location.host}${labPath('/ws')}`;
+  if (LAB_BASE_PATH !== '/') return sameOrigin;
+  if (params.get("ws")) return params.get("ws");
   const saved = localStorage.getItem("s2s.ws");
   const legacyDirect =
     /^ws:\/\/(?:127\.0\.0\.1|localhost):8765\/?$/.test(saved || "") &&
@@ -1714,6 +1718,7 @@ function defaultWsUrl() {
 }
 
 if (els.wsUrl) els.wsUrl.value = defaultWsUrl();
+if (els.wsUrl && LAB_BASE_PATH !== '/') els.wsUrl.disabled = true;
 if (els.talkMode) {
   els.talkMode.value = localStorage.getItem("s2s.talkMode") || "hold";
   state.talkMode = els.talkMode.value;
@@ -2249,7 +2254,7 @@ function playPcmI16(arrayBuffer) {
  */
 function connect(opts = {}) {
   const auto = !!opts.auto;
-  const url = (els.wsUrl?.value || defaultWsUrl()).trim();
+  const url = (LAB_BASE_PATH !== '/' ? defaultWsUrl() : (els.wsUrl?.value || defaultWsUrl())).trim();
   if (!url) return;
 
   state.wantConnected = true;
@@ -2646,7 +2651,7 @@ function renderBenchmark(run) {
   if (els.benchmarkTableWrap) els.benchmarkTableWrap.hidden = samples.length === 0;
   if (els.benchmarkExport) {
     els.benchmarkExport.hidden = run.status !== "completed";
-    els.benchmarkExport.href = `/api/v1/benchmarks/${encodeURIComponent(run.id)}?format=csv`;
+    els.benchmarkExport.href = labPath(`/api/v1/benchmarks/${encodeURIComponent(run.id)}?format=csv`);
   }
 }
 
@@ -2654,7 +2659,7 @@ async function submitBenchmarkRating(button) {
   const runId = button.dataset.run;
   const sampleIndex = Number(button.dataset.sample);
   const score = Number(button.dataset.score);
-  const response = await fetch(`/api/v1/benchmarks/${encodeURIComponent(runId)}/ratings`, {
+  const response = await fetch(labPath(`/api/v1/benchmarks/${encodeURIComponent(runId)}/ratings`), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ sample_index: sampleIndex, score }),
@@ -2679,7 +2684,7 @@ function escapeHtml(value) {
 
 async function pollBenchmark(id) {
   for (;;) {
-    const response = await fetch(`/api/v1/benchmarks/${encodeURIComponent(id)}`, {
+    const response = await fetch(labPath(`/api/v1/benchmarks/${encodeURIComponent(id)}`), {
       cache: "no-store",
     });
     if (!response.ok) throw new Error(`Benchmark HTTP ${response.status}`);
@@ -2699,7 +2704,7 @@ async function startBenchmark() {
       .map((line) => line.trim())
       .filter(Boolean);
     const kind = els.benchmarkKind?.value || "tts";
-    const response = await fetch("/api/v1/benchmarks", {
+    const response = await fetch(labPath("/api/v1/benchmarks"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ kind, prompts }),

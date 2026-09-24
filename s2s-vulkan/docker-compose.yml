@@ -694,7 +694,7 @@ services:
 
   # ── Optional fancy web test UI ─────────────────────────────────────
   # docker compose --profile web up -d --build
-  # Browser: http://localhost:8088  (WS via same origin /ws → s2s:8765)
+  # Local browser: http://127.0.0.1:${WEB_PORT:-8088} (remote access goes through AuraGo /speech-lab/)
   web:
     build:
       context: ./web
@@ -705,7 +705,7 @@ services:
     depends_on:
       - s2s
     ports:
-      - "${S2S_BIND_HOST:-127.0.0.1}:${WEB_PORT:-8766}:80"
+      - "127.0.0.1:${WEB_PORT:-8088}:80"
     networks:
       - s2s
     restart: unless-stopped

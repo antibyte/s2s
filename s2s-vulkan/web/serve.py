@@ -5,12 +5,12 @@ HTTPS static server + WSS→WS reverse proxy for the s2s lab UI.
 Browsers only allow getUserMedia (microphone) in a secure context:
   - https://…  or  http://localhost / http://127.0.0.1
 
-From another machine you need HTTPS. This server:
+This local helper:
   1) Serves the UI over HTTPS (self-signed cert, auto-generated)
   2) Proxies wss://host:port/ws  →  ws://BACKEND (avoids mixed content)
 
 Usage:
-  python serve.py --host 0.0.0.0 --port 9999 --backend 127.0.0.1:8765
+  python serve.py --host 127.0.0.1 --port 9999 --backend 127.0.0.1:8765
 """
 
 from __future__ import annotations
@@ -23,11 +23,44 @@ import ssl
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 WEB_DIR = Path(__file__).resolve().parent
 CERT_DIR = WEB_DIR / ".certs"
 CERT_FILE = CERT_DIR / "cert.pem"
 KEY_FILE = CERT_DIR / "key.pem"
+
+
+def valid_local_browser_origin(host: str, origin: str | None) -> bool:
+    """Keep the loopback HTTPS helper unavailable through DNS rebinding."""
+    try:
+        authority = urlsplit(f"https://{host}")
+        authority.port
+    except ValueError:
+        return False
+    if (
+        authority.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or authority.username is not None
+        or authority.path
+        or authority.query
+        or authority.fragment
+    ):
+        return False
+    if origin is None:
+        return True
+    try:
+        parsed = urlsplit(origin)
+        parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc.lower() == host.lower()
+        and not parsed.path
+        and not parsed.query
+        and not parsed.fragment
+        and parsed.username is None
+    )
 
 
 def local_ips() -> list[str]:
@@ -128,6 +161,10 @@ def backend_reachable(host: str, port: int, timeout: float = 1.0) -> bool:
 
 
 async def main_async(host: str, port: int, backend: str, backend_ws_path: str) -> None:
+    if host == "localhost":
+        host = "127.0.0.1"
+    if host not in {"127.0.0.1", "::1"}:
+        raise ValueError("the standalone Lab server must bind to loopback; use AuraGo /speech-lab/ remotely")
     ensure_aiohttp()
     ensure_certs()
 
@@ -174,7 +211,7 @@ async def main_async(host: str, port: int, backend: str, backend_ws_path: str) -
         headers = {
             name: value
             for name, value in request.headers.items()
-            if name.lower() not in hop_by_hop and name.lower() != "host"
+            if name.lower() not in hop_by_hop and name.lower() not in {"host", "origin"}
         }
         try:
             timeout = ClientTimeout(total=None, sock_connect=5, sock_read=None)
@@ -291,7 +328,13 @@ async def main_async(host: str, port: int, backend: str, backend_ws_path: str) -
                 await client.close()
         return client
 
-    app = web.Application()
+    @web.middleware
+    async def local_browser_guard(request: web.Request, handler):
+        if not valid_local_browser_origin(request.host, request.headers.get("Origin")):
+            return web.Response(status=403, text="Lab origin rejected")
+        return await handler(request)
+
+    app = web.Application(middlewares=[local_browser_guard])
     app.router.add_get("/", index)
     app.router.add_get("/health", health)
     app.router.add_get("/healthz", health)
@@ -307,16 +350,13 @@ async def main_async(host: str, port: int, backend: str, backend_ws_path: str) -
     site = web.TCPSite(runner, host=host, port=port, ssl_context=ssl_ctx)
     await site.start()
 
-    ips = [ip for ip in local_ips() if not ip.startswith("127.")]
     print("", file=sys.stderr)
-    print("s2s lab HTTPS ready (self-signed — accept the browser warning once)", file=sys.stderr)
+    print("s2s lab local HTTPS ready (self-signed)", file=sys.stderr)
     print(f"  local:   https://127.0.0.1:{port}", file=sys.stderr)
-    for ip in ips:
-        print(f"  network: https://{ip}:{port}", file=sys.stderr)
     print(f"  WSS:     wss://<host>:{port}/ws  →  {backend_ws}", file=sys.stderr)
     print(f"  API:     https://<host>:{port}/api/ → {backend_http}/api/", file=sys.stderr)
     print(f"  health:  https://<host>:{port}/health", file=sys.stderr)
-    print("  Mic works on remote devices because the page is HTTPS.", file=sys.stderr)
+    print("  Remote browser access: AuraGo /speech-lab/", file=sys.stderr)
     if not backend_reachable(b_host, b_port):
         print(
             f"  WARNING: backend {backend} is NOT listening right now",
@@ -330,7 +370,7 @@ async def main_async(host: str, port: int, backend: str, backend_ws_path: str) -
 
 def main() -> None:
     p = argparse.ArgumentParser(description="HTTPS + WSS proxy for s2s web lab")
-    p.add_argument("--host", default="0.0.0.0")
+    p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=9999)
     p.add_argument(
         "--backend",

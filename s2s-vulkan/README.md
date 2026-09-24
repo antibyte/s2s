@@ -49,13 +49,16 @@ Linux:
 S2S_LAB_BUILD=1 scripts/prepare_lab.sh intel-sycl
 ```
 
-Open `http://127.0.0.1:8766`. This is the only host-published lab port; the
+Open `http://127.0.0.1:8088`. This is the only host-published lab port; the
 controller remains on the private Compose network. The UI loads compatible choices from
 `GET /api/v1/catalog`, switches through `PUT /api/v1/stack`, displays download,
 health and warmup events, and stores ASR (latency/WER/CER), LLM
 (TTFT/tokens/s) and TTS (TTFA/RTF) measurements in the persistent
 `s2s-lab-data` volume. TTS samples additionally support blind 1–5 ratings.
 Benchmark JSON/CSV is available below `/api/v1/benchmarks`.
+
+Remote browsers use the signed-in AuraGo path `/speech-lab/`; the standalone
+web port remains loopback-only even if an old `.env` contains `S2S_BIND_HOST`.
 
 AuraGo integration (capability profile, suggestions, planned gateway) is documented in
 [`docs/aurago-integration.md`](docs/aurago-integration.md). The orchestrator exposes:
@@ -611,7 +614,7 @@ python scripts/download_supertonic.py
 # → models/supertonic/onnx + models/supertonic/voice_styles
 
 cargo run --release -- \
-  --mode websocket --host 0.0.0.0 --port 8765 \
+  --mode websocket --host 127.0.0.1 --port 8765 \
   --tts supertonic \
   --supertonic-model-dir models/supertonic/onnx \
   --supertonic-voice M1 \
@@ -640,40 +643,39 @@ Optional browser lab for the raw PCM WebSocket backend:
 
 ```bash
 # terminal 1 — backend in websocket mode
-cargo run --release -- --mode websocket --host 0.0.0.0 --port 8765
+cargo run --release -- --mode websocket --host 127.0.0.1 --port 8765
 
-# terminal 2 — HTTPS UI (required for microphone from other devices)
+# terminal 2 — local HTTPS UI
 cd web
-python serve.py --host 0.0.0.0 --port 9999 --backend 127.0.0.1:8765
-# open https://127.0.0.1:9999  (or https://<LAN-IP>:9999 from another PC)
+python serve.py --port 9999 --backend 127.0.0.1:8765
+# open https://127.0.0.1:9999
 ```
 
 Browsers only allow the microphone in a **secure context** (`https://` or `http://localhost`).
 `serve.py` generates a self-signed cert and proxies `wss://…/ws` → the backend so there is no mixed content.
 
-From another PC: open `https://<this-machine-ip>:9999`, accept the certificate warning once, Connect, hold the orb.
+From another PC, use the authenticated AuraGo `/speech-lab/` URL.
 
 ### Docker (optional profile)
 
 ```bash
 docker compose --profile web up -d --build
-# UI:  http://localhost:8766
+# UI:  http://localhost:8088
 # WS:  same origin /ws  →  proxied to s2s:8765
 ```
 
-For HTTPS microphone access while keeping the complete Docker stack, the local
-HTTPS server can proxy both the Lab API and WebSocket through the Docker web
-gateway:
+The local HTTPS helper can proxy both the Lab API and WebSocket through the
+Docker web gateway:
 
 ```bash
 cd web
-python serve.py --host 0.0.0.0 --port 9999 \
-  --backend 127.0.0.1:8766 --backend-ws-path /ws
+python serve.py --port 9999 \
+  --backend 127.0.0.1:8088 --backend-ws-path /ws
 ```
 
 Also included in `--profile full`.
 
-Env: `WEB_PORT=8766`.
+Env: `WEB_PORT=8088`.
 
 > The Compose default is `--mode lab`, which includes binary PCM WebSocket
 > transport and the controller API.
