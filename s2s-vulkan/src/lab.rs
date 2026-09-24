@@ -3912,6 +3912,10 @@ impl LabController {
         let vibevoice = backend.id == "vibevoice-realtime-0.5b";
         let xtts = backend.id == "xtts-v2";
         let inflect = backend.id == "inflect-micro-v2";
+        let audio8 = matches!(
+            backend.id.as_str(),
+            "audio8-tts-preview-0.6b" | "audio8-tts-preview-0.1b"
+        );
         let crispasr_wav = matches!(
             backend.id.as_str(),
             "piper"
@@ -3920,6 +3924,8 @@ impl LabController {
                 | "vibevoice-realtime-0.5b"
                 | "kokoro"
                 | "inflect-micro-v2"
+                | "audio8-tts-preview-0.6b"
+                | "audio8-tts-preview-0.1b"
         );
         let voice = if backend.default_voice.is_empty() {
             "default"
@@ -3950,7 +3956,7 @@ impl LabController {
                 "de"
             },
             "response_format": response_format,
-            "max_new_tokens": if qwen { 16 } else if higgs { 256 } else { 64 }
+            "max_new_tokens": if qwen { 16 } else if higgs { 256 } else if audio8 { 256 } else { 64 }
         });
         if inflect {
             body["seed"] = serde_json::json!(7);
@@ -3972,7 +3978,7 @@ impl LabController {
         let response = self
             .client
             .post(endpoint)
-            .timeout(Duration::from_secs(60))
+            .timeout(Duration::from_secs(if audio8 { 180 } else { 60 }))
             .json(&body)
             .send()
             .await

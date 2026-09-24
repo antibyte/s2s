@@ -10,18 +10,18 @@ def should_drop_segment(
 ) -> bool:
     """Reject only clearly unreliable text.
 
-    Tiny frequently assigns a high no-speech probability to short valid
-    utterances. Whisper's decision rule combines that probability with a poor
-    log probability, so a high no-speech value alone must not discard text.
+    Tiny often scores short, valid German clips around -1.2..-1.6 even when
+    the transcript is usable (Voice HAT PTT is typically 1–2 s). A low
+    no-speech probability means the model heard speech — keep that text.
+    Drop only obvious silence or garbage/hallucination.
     """
-    if avg_logprob is not None and avg_logprob < -1.2:
+    ns = 0.0 if no_speech_prob is None else no_speech_prob
+    lp = 0.0 if avg_logprob is None else avg_logprob
+    if ns > 0.85 and lp < -1.0:
         return True
-    return (
-        no_speech_prob is not None
-        and no_speech_prob > 0.95
-        and avg_logprob is not None
-        and avg_logprob < -1.0
-    )
+    if lp < -2.0:
+        return True
+    return False
 
 
 def transcription_options(language: str | None) -> dict:
@@ -37,17 +37,14 @@ def transcription_options(language: str | None) -> dict:
         "best_of": 5,
         "patience": 1.0,
         "temperature": 0.0,
-        "vad_filter": True,
-        "vad_parameters": {
-            "min_silence_duration_ms": 400,
-            "speech_pad_ms": 200,
-            "threshold": 0.5,
-        },
+        # Lab/client already VAD-segmented the clip. A second Silero pass
+        # on 1–2 s Voice HAT turns eats signal and tanks tiny's logprob.
+        "vad_filter": False,
         "condition_on_previous_text": False,
         "without_timestamps": True,
         "compression_ratio_threshold": 2.4,
-        "log_prob_threshold": -1.0,
-        "no_speech_threshold": 0.6,
+        "log_prob_threshold": -2.0,
+        "no_speech_threshold": 0.8,
     }
 
 

@@ -806,6 +806,21 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let play_task = tokio::spawn(async move {
         while let Some(chunk) = audio_out_rx.recv().await {
             if chunk.response_done && chunk.pcm_i16.is_empty() {
+                // Emit response_done only after PCM so PTT clients do not
+                // close the speaker while sentence-2 audio is still queued.
+                let json = match serde_json::to_string(&PipelineEvent::ResponseDone {
+                    turn: PipelineEvent::turn_id(&chunk.turn),
+                }) {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let mut socket = out_sink.lock().await;
+                if socket.send(Message::Text(json.into())).await.is_err() {
+                    break;
+                }
+                continue;
+            }
+            if chunk.pcm_i16.is_empty() {
                 continue;
             }
             let bytes = i16_to_bytes_le(&chunk.pcm_i16);
@@ -819,6 +834,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let event_sink = sink.clone();
     let event_task = tokio::spawn(async move {
         while let Some(event) = event_rx.recv().await {
+            if matches!(event, PipelineEvent::ResponseDone { .. }) {
+                continue;
+            }
             let Ok(json) = serde_json::to_string(&event) else {
                 continue;
             };

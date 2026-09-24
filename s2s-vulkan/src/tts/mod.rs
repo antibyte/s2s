@@ -473,6 +473,10 @@ fn http_wants_pcm(cfg: &Config) -> bool {
         || u.contains("inflect")
         || u.contains(":8095")
         || u.ends_with(":8095")
+        || m.contains("audio8")
+        || u.contains("audio8")
+        || u.contains(":8096")
+        || u.ends_with(":8096")
     {
         return false;
     }
@@ -1361,6 +1365,14 @@ mod tests {
 
         cfg.tts_model = "inflect-micro-v2".into();
         cfg.tts_url = "http://127.0.0.1:8095/v1/audio/speech".into();
+        assert!(!http_wants_pcm(&cfg));
+
+        cfg.tts_model = "Audio8/Audio8-TTS-Preview-0.6b".into();
+        cfg.tts_url = "http://127.0.0.1:8096/v1/audio/speech".into();
+        assert!(!http_wants_pcm(&cfg));
+
+        cfg.tts_model = "Audio8/Audio8-TTS-Preview-0.1b".into();
+        cfg.tts_url = "http://127.0.0.1:8096/v1/audio/speech".into();
         assert!(!http_wants_pcm(&cfg));
 
         cfg.tts_model = "qwen3-tts-sycl".into();

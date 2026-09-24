@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Allowlisted OpenAI-compatible HTTP sidecar for Audio8 TTS Preview 0.6B."""
+"""Allowlisted OpenAI-compatible HTTP sidecar for Audio8 TTS Preview models."""
 
 from __future__ import annotations
 
@@ -269,16 +269,27 @@ def resolve_reference(
 
 
 class Audio8Runtime:
-    def __init__(self, model_dir: Path, device: str) -> None:
+    def __init__(
+        self,
+        model_dir: Path,
+        device: str,
+        *,
+        model_id: str = MODEL_ID,
+        model_alias: str = MODEL_ALIAS,
+        revision: str = MODEL_REVISION,
+    ) -> None:
         import torch
         from transformers import AutoModel, AutoProcessor
 
         model_dir = validate_model_dir(model_dir)
         self.model_dir = model_dir
         self.device = device
+        self.model_id = model_id
+        self.model_alias = model_alias
+        self.revision = revision
         dtype = torch.bfloat16 if device == "cuda" else torch.float32
         print(
-            f"Loading {MODEL_ALIAS} revision={MODEL_REVISION} "
+            f"Loading {self.model_alias} revision={self.revision} "
             f"device={device} model_dir={model_dir}",
             flush=True,
         )
@@ -387,9 +398,9 @@ def make_handler(
                     HTTPStatus.OK,
                     {
                         "status": "ok",
-                        "backend": MODEL_ALIAS,
-                        "model": MODEL_ID,
-                        "revision": MODEL_REVISION,
+                        "backend": runtime.model_alias,
+                        "model": runtime.model_id,
+                        "revision": runtime.revision,
                         "sample_rate": runtime.sample_rate,
                         "device": runtime.device,
                     },
@@ -402,7 +413,7 @@ def make_handler(
                         "object": "list",
                         "data": [
                             {
-                                "id": MODEL_ALIAS,
+                                "id": runtime.model_alias,
                                 "object": "model",
                                 "owned_by": "local",
                             }
@@ -445,7 +456,7 @@ def make_handler(
                 content_type,
                 extra_headers={
                     "X-Sample-Rate": str(runtime.sample_rate),
-                    "X-S2S-Model": MODEL_ALIAS,
+                    "X-S2S-Model": runtime.model_alias,
                 },
             )
 
@@ -471,6 +482,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--default-language",
         default=os.environ.get("S2S_AUDIO8_LANGUAGE", "de"),
     )
+    parser.add_argument(
+        "--model-id",
+        default=os.environ.get("S2S_AUDIO8_MODEL_ID", MODEL_ID),
+    )
+    parser.add_argument(
+        "--model-alias",
+        default=os.environ.get("S2S_AUDIO8_MODEL_ALIAS", MODEL_ALIAS),
+    )
+    parser.add_argument(
+        "--revision",
+        default=os.environ.get("S2S_AUDIO8_REVISION", MODEL_REVISION),
+    )
     return parser.parse_args(argv)
 
 
@@ -478,7 +501,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         default_language = normalize_language(args.default_language, "de")
-        runtime = Audio8Runtime(Path(args.model_dir), device=args.device)
+        runtime = Audio8Runtime(
+            Path(args.model_dir),
+            device=args.device,
+            model_id=args.model_id,
+            model_alias=args.model_alias,
+            revision=args.revision,
+        )
     except Exception as error:  # noqa: BLE001
         print(f"failed to load Audio8: {error}", file=sys.stderr)
         return 1

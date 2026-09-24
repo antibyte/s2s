@@ -305,10 +305,15 @@ $Script:Profiles = @{
     "audio8-python" = New-Profile `
         -Name "audio8-python" -Stage "tts" -Port 8096 `
         -Executable $Script:Audio8Python `
-        -BackendIds @("audio8-tts-preview-0.6b") `
+        -BackendIds @(
+            "audio8-tts-preview-0.6b",
+            "audio8-tts-preview-0.1b"
+        ) `
         -VariantIds @(
             "audio8-tts-preview-0.6b-host-cpu",
-            "audio8-tts-preview-0.6b-host-cuda"
+            "audio8-tts-preview-0.6b-host-cuda",
+            "audio8-tts-preview-0.1b-host-cpu",
+            "audio8-tts-preview-0.1b-host-cuda"
         )
     "llama-granite" = New-Profile `
         -Name "llama-granite" -Stage "llm" -Port 8081 `
@@ -893,7 +898,23 @@ function Get-LaunchSpec {
             }
         }
         "audio8-python" {
-            $modelDir = Split-Path -Parent (Resolve-ModelPath "audio8-tts-preview-0.6b\model.safetensors")
+            $backendId = [string]$Command.backend_id
+            $modelRel = if ($backendId -eq "audio8-tts-preview-0.1b") {
+                "audio8-tts-preview-0.1b"
+            } else {
+                "audio8-tts-preview-0.6b"
+            }
+            $modelId = if ($backendId -eq "audio8-tts-preview-0.1b") {
+                "Audio8/Audio8-TTS-Preview-0.1b"
+            } else {
+                "Audio8/Audio8-TTS-Preview-0.6b"
+            }
+            $revision = if ($backendId -eq "audio8-tts-preview-0.1b") {
+                "7a644014c398a0495d5efd1da7461bfeb4dbddcd"
+            } else {
+                "f9612f13a0ab40facf3d050fc908b9e6db05c2be"
+            }
+            $modelDir = Split-Path -Parent (Resolve-ModelPath "$modelRel\model.safetensors")
             foreach ($name in @(
                 "codec.pth",
                 "config.json",
@@ -908,7 +929,7 @@ function Get-LaunchSpec {
                 "special_tokens_map.json",
                 "generation_config.json"
             )) {
-                Resolve-ModelPath "audio8-tts-preview-0.6b\$name" | Out-Null
+                Resolve-ModelPath "$modelRel\$name" | Out-Null
             }
             $serverScript = [IO.Path]::GetFullPath(
                 (Join-Path $PSScriptRoot "tts_audio8_server.py")
@@ -925,12 +946,18 @@ function Get-LaunchSpec {
                 arguments = @(
                     $serverScript,
                     "--model-dir", $modelDir,
+                    "--model-id", $modelId,
+                    "--model-alias", $modelRel,
+                    "--revision", $revision,
                     "--device", $device,
                     "--host", "127.0.0.1",
                     "--port", "$($Profile.port)"
                 )
                 environment = @{
                     S2S_AUDIO8_MODEL_DIR = $modelDir
+                    S2S_AUDIO8_MODEL_ID = $modelId
+                    S2S_AUDIO8_MODEL_ALIAS = $modelRel
+                    S2S_AUDIO8_REVISION = $revision
                     S2S_AUDIO8_DEVICE = $device
                     HF_HUB_OFFLINE = "1"
                     TRANSFORMERS_OFFLINE = "1"

@@ -14,8 +14,13 @@ class SegmentFilterTests(unittest.TestCase):
     def test_keeps_short_speech_with_high_no_speech_probability(self):
         self.assertFalse(MODULE.should_drop_segment(-0.4, 0.87))
 
-    def test_drops_low_probability_text(self):
-        self.assertTrue(MODULE.should_drop_segment(-1.3, 0.1))
+    def test_keeps_tiny_voicekit_clip(self):
+        # Real Voice HAT turns dropped by the old logprob < -1.2 rule.
+        self.assertFalse(MODULE.should_drop_segment(-1.38, 0.12))
+        self.assertFalse(MODULE.should_drop_segment(-1.27, 0.25))
+
+    def test_drops_garbage_logprob(self):
+        self.assertTrue(MODULE.should_drop_segment(-2.1, 0.2))
 
     def test_drops_combined_strong_silence_signal(self):
         self.assertTrue(MODULE.should_drop_segment(-1.1, 0.97))
@@ -23,7 +28,7 @@ class SegmentFilterTests(unittest.TestCase):
     def test_transcription_options_do_not_seed_transcript_text(self):
         options = MODULE.transcription_options("de")
         self.assertEqual(options["language"], "de")
-        self.assertTrue(options["vad_filter"])
+        self.assertFalse(options["vad_filter"])
         self.assertNotIn("initial_prompt", options)
 
 

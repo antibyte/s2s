@@ -58,6 +58,12 @@ pub async fn run_stt(
                         let text = text.trim().to_string();
                         if text.is_empty() {
                             warn!("STT returned empty transcript — reopening mic");
+                            let _ = event_tx
+                                .send(PipelineEvent::Error {
+                                    stage: "stt".into(),
+                                    message: "empty transcript".into(),
+                                })
+                                .await;
                             should_listen.store(true, std::sync::atomic::Ordering::Relaxed);
                             continue;
                         }

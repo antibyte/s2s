@@ -67,6 +67,36 @@ class Audio8RequestTests(unittest.TestCase):
                 default_language="de",
             )
 
+    def test_cli_defaults_remain_preview_06b(self):
+        args = SERVER.parse_args([])
+        self.assertEqual(args.model_id, "Audio8/Audio8-TTS-Preview-0.6b")
+        self.assertEqual(args.model_alias, "audio8-tts-preview-0.6b")
+        self.assertEqual(args.revision, "f9612f13a0ab40facf3d050fc908b9e6db05c2be")
+        self.assertEqual(args.port, 8096)
+        self.assertEqual(args.model_dir, "models/audio8-tts-preview-0.6b")
+
+    def test_cli_accepts_preview_01b_identity(self):
+        args = SERVER.parse_args(
+            [
+                "--model-id",
+                "Audio8/Audio8-TTS-Preview-0.1b",
+                "--model-alias",
+                "audio8-tts-preview-0.1b",
+                "--revision",
+                "7a644014c398a0495d5efd1da7461bfeb4dbddcd",
+                "--model-dir",
+                "models/audio8-tts-preview-0.1b",
+                "--port",
+                "8096",
+            ]
+        )
+        self.assertEqual(args.model_id, "Audio8/Audio8-TTS-Preview-0.1b")
+        self.assertEqual(args.model_alias, "audio8-tts-preview-0.1b")
+        self.assertEqual(
+            args.revision, "7a644014c398a0495d5efd1da7461bfeb4dbddcd"
+        )
+        self.assertEqual(args.model_dir, "models/audio8-tts-preview-0.1b")
+
 
 class Audio8AudioTests(unittest.TestCase):
     def test_wav_encoding_is_mono_pcm16_at_44100(self):
