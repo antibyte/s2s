@@ -199,8 +199,9 @@ jobs:
           }
           if [[ "$GITHUB_REF_NAME" == "v0.2.16-speech-lab" ]]; then
             # Image progress changes the controller, gateway and browser UI.
-            # Reuse the model sidecars from the previous signed bundle.
+            # Rebuild Qwen Vulkan with its native server; reuse other sidecars.
             build s2s-speech-lab-controller s2s-vulkan/docker/Dockerfile.controller
+            build s2s-tts-qwen-vulkan s2s-vulkan/docker/Dockerfile.tts-vulkan
             docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push \
               -t "ghcr.io/$owner/s2s-web:$TAG" -f s2s-vulkan/web/Dockerfile s2s-vulkan/web
             previous_tag=sha-a3703346c2d83414c4ffc0a2102150e40dec0cd8
@@ -208,7 +209,7 @@ jobs:
           import json
           with open("s2s-vulkan/deploy/speech-lab-bundle.json", encoding="utf-8") as fh:
               images = json.load(fh)["images"]
-          changed = {"gateway", "controller", "web"}
+          changed = {"gateway", "controller", "web", "qwen_vulkan"}
           for repository in sorted({ref.split("/", 2)[-1].split("@", 1)[0]
                                     for key, ref in images.items() if key not in changed}):
               print(repository)

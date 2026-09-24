@@ -47,4 +47,6 @@ This project is indexed by GitNexus as **s2s** (1337 symbols, 3484 relationships
 
 - Module installation status reports model bytes and Docker image bytes separately. The controller deduplicates pull events by layer and publishes increasing image bytes while the pull is active; the gateway carries these bytes through `/api/v1/modules/{backend_id}/install`.
 - The Browser Lab uses one stable total for model plus image installation and never moves its displayed progress backward when WebSocket and polling updates arrive out of order. During image preparation it shows image bytes when Docker reports them.
+- The managed Qwen3-TTS Vulkan image builds the pinned native `qwentts.cpp` server with Vulkan and opens the already provisioned 0.6B talker and codec GGUF files from `/models`; do not use the Python GGML wrapper without its optional native binding.
 - Verify changes with `go test ./...` in `s2s-vulkan/controller`, `cargo check --tests`, and `node --check s2s-vulkan/web/app.js`.
+- For the Vulkan sidecar, build `s2s-vulkan/docker/Dockerfile.tts-vulkan` and run `tts-server --help` inside the resulting image before publishing it.
