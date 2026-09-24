@@ -432,7 +432,7 @@ impl BenchmarkService {
             let body = serde_json::json!({
                 "model": cfg.model_name,
                 "messages": [
-                    {"role": "system", "content": cfg.system_prompt},
+                    {"role": "system", "content": cfg.llm_system_prompt(None)},
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": cfg.temperature,

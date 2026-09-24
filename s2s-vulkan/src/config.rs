@@ -3,6 +3,9 @@
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a helpful voice assistant. Always reply in the same language the user speaks. If the user speaks German, reply only in German. Keep replies short and conversational (1-3 sentences).";
+const DEFAULT_GERMAN_SYSTEM_PROMPT: &str = "Du bist ein deutschsprachiger Sprachassistent. Du verstehst Deutsch und beantwortest jede Frage direkt, freundlich und ausschließlich auf Deutsch. Deine Antworten sind kurz und natürlich.";
+
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 pub enum Mode {
     /// Microphone in, speakers out (cpal).
@@ -151,7 +154,7 @@ pub struct Config {
     /// user's language (important: cloud models otherwise default to English).
     #[arg(
         long,
-        default_value = "You are a helpful voice assistant. Always reply in the same language the user speaks. If the user speaks German, reply only in German. Keep replies short and conversational (1-3 sentences).",
+        default_value = DEFAULT_SYSTEM_PROMPT,
         env = "S2S_SYSTEM_PROMPT"
     )]
     pub system_prompt: String,
@@ -330,6 +333,24 @@ impl Config {
         // only when S2S_FORCE_LOCAL is unset. Leave mode alone; entrypoint sets --mode.
     }
 
+    /// Use the tested German prompt for the default German lab without changing
+    /// an explicitly configured system prompt or other conversation languages.
+    pub fn llm_system_prompt(&self, detected: Option<&str>) -> String {
+        let language = detected
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("auto"))
+            .unwrap_or(self.language.as_str());
+        if self.system_prompt == DEFAULT_SYSTEM_PROMPT
+            && matches!(
+                language.to_ascii_lowercase().as_str(),
+                "de" | "deu" | "ger" | "deutsch" | "german"
+            )
+        {
+            return DEFAULT_GERMAN_SYSTEM_PROMPT.to_string();
+        }
+        self.system_prompt.clone()
+    }
+
     /// Resolve language code for TTS engines that require one (Supertonic, HTTP, …).
     ///
     /// Priority:
@@ -392,5 +413,26 @@ mod tests {
             Config::try_parse_from(["s2s-vulkan", "--supertonic-provider", "webgpu-vulkan"])
                 .unwrap();
         assert_eq!(vulkan.supertonic_provider, SupertonicProvider::WebgpuVulkan);
+    }
+
+    #[test]
+    fn german_lab_prompt_preserves_other_languages_and_custom_prompts() {
+        let default = Config::try_parse_from(["s2s-vulkan"]).unwrap();
+        assert_eq!(
+            default.llm_system_prompt(Some("de")),
+            DEFAULT_GERMAN_SYSTEM_PROMPT
+        );
+        assert_eq!(default.llm_system_prompt(Some("en")), DEFAULT_SYSTEM_PROMPT);
+
+        let english = Config::try_parse_from(["s2s-vulkan", "--language", "en"]).unwrap();
+        assert_eq!(english.llm_system_prompt(None), DEFAULT_SYSTEM_PROMPT);
+
+        let custom = Config::try_parse_from([
+            "s2s-vulkan",
+            "--system-prompt",
+            "Answer in your configured language.",
+        ])
+        .unwrap();
+        assert_eq!(custom.llm_system_prompt(Some("de")), custom.system_prompt);
     }
 }

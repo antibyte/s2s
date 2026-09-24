@@ -41,7 +41,7 @@ pub async fn run_llm(
         let rt = runtime.read().await;
         history.push(ChatMessage {
             role: "system".into(),
-            content: rt.cfg.system_prompt.clone(),
+            content: rt.cfg.llm_system_prompt(None),
         });
     }
 
@@ -56,7 +56,7 @@ pub async fn run_llm(
                 let rt = runtime.read().await;
                 history.push(ChatMessage {
                     role: "system".into(),
-                    content: rt.cfg.system_prompt.clone(),
+                    content: rt.cfg.llm_system_prompt(None),
                 });
                 should_listen.store(true, std::sync::atomic::Ordering::Relaxed);
                 continue;
@@ -67,6 +67,9 @@ pub async fn run_llm(
                     continue;
                 }
                 let cfg = runtime.read().await.cfg.clone();
+                if let Some(system) = history.first_mut() {
+                    system.content = cfg.llm_system_prompt(tr.language.as_deref());
+                }
                 history.push(ChatMessage {
                     role: "user".into(),
                     content: tr.text.clone(),

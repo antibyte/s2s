@@ -50,3 +50,8 @@ This project is indexed by GitNexus as **s2s** (1337 symbols, 3484 relationships
 - The managed Qwen3-TTS Vulkan image builds the pinned native `qwentts.cpp` server with Vulkan and opens the already provisioned 0.6B talker and codec GGUF files from `/models`; do not use the Python GGML wrapper without its optional native binding.
 - Verify changes with `go test ./...` in `s2s-vulkan/controller`, `cargo check --tests`, and `node --check s2s-vulkan/web/app.js`.
 - For the Vulkan sidecar, build `s2s-vulkan/docker/Dockerfile.tts-vulkan` and run `tts-server --help` inside the resulting image before publishing it.
+
+## Speech Lab Response Language
+
+- The bundled Granite LLM writes the Browser Lab's BOT text; Qwen3-TTS voices only synthesize that text. With the default German lab language and default system prompt, send the tested German-specific prompt to Granite for each turn. Preserve explicitly configured `S2S_SYSTEM_PROMPT` values and the generic prompt for other language settings. The LLM benchmark must use the same effective prompt as live turns.
+- Verify German answer content with the questions `Dein Name? Wie ist dein Name?` and `Sprich bitte Deutsch mit mir.` through the bundled LLM, plus an English and custom-prompt regression check. A new WebSocket session is needed to test a newly published gateway image.
