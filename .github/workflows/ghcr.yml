@@ -197,6 +197,31 @@ jobs:
             docker buildx build --platform linux/amd64 --provenance=true --sbom=false --push \
               -t "ghcr.io/$owner/$repository:$TAG" -f "$dockerfile" "$@" s2s-vulkan
           }
+          if [[ "$GITHUB_REF_NAME" == "v0.2.17-speech-lab" ]]; then
+            # Use observed Docker layer totals in the controller and gateway,
+            # and keep the browser progress monotonic as totals are discovered.
+            # The native Qwen runtime and all other model sidecars are unchanged.
+            build s2s-speech-lab-controller s2s-vulkan/docker/Dockerfile.controller
+            docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push \
+              -t "ghcr.io/$owner/s2s-web:$TAG" -f s2s-vulkan/web/Dockerfile s2s-vulkan/web
+            previous_tag=sha-15cf80160d07424b679dbb4a78bd1dde0d3d90fd
+            mapfile -t unchanged_repositories < <(python - <<'PY'
+          import json
+          with open("s2s-vulkan/deploy/speech-lab-bundle.json", encoding="utf-8") as fh:
+              images = json.load(fh)["images"]
+          changed = {"gateway", "controller", "web"}
+          for repository in sorted({ref.split("/", 2)[-1].split("@", 1)[0]
+                                    for key, ref in images.items() if key not in changed}):
+              print(repository)
+          PY
+            )
+            for repository in "${unchanged_repositories[@]}"; do
+              docker buildx imagetools create \
+                -t "ghcr.io/$owner/$repository:$TAG" \
+                "ghcr.io/$owner/$repository:$previous_tag"
+            done
+            exit 0
+          fi
           if [[ "$GITHUB_REF_NAME" == "v0.2.16-speech-lab" ]]; then
             # Image progress changes the controller, gateway and browser UI.
             # Rebuild Qwen Vulkan with its native server; reuse other sidecars.

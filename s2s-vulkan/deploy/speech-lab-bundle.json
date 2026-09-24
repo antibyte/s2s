@@ -837,7 +837,7 @@
       "container": "s2s-tts-kokoro",
       "image": "ghcr.io/antibyte/s2s-tts-kokoro@sha256:0000000000000000000000000000000000000000000000000000000000000000",
       "image_key": "kokoro",
-      "image_download_size_bytes": 650000000,
+      "image_download_size_bytes": 120000000,
       "architectures": [
         "amd64"
       ],
@@ -1338,7 +1338,7 @@
       "container": "s2s-tts-qwen-vulkan",
       "image": "ghcr.io/antibyte/s2s-tts-qwen-vulkan@sha256:0000000000000000000000000000000000000000000000000000000000000000",
       "image_key": "qwen_vulkan",
-      "image_download_size_bytes": 1800000000,
+      "image_download_size_bytes": 135000000,
       "architectures": [
         "amd64"
       ],
@@ -1398,7 +1398,7 @@
       "container": "s2s-tts-vibevoice",
       "image": "ghcr.io/antibyte/s2s-tts-vibevoice-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
       "image_key": "vibevoice_cpu",
-      "image_download_size_bytes": 1200000000,
+      "image_download_size_bytes": 500000000,
       "architectures": [
         "amd64"
       ],

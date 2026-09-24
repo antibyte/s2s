@@ -1585,9 +1585,11 @@ impl LabController {
                 }
             }
         }
-        let image_download_size_bytes = runtime
-            .image_download_size_bytes
-            .max(variant.image_download_size_bytes);
+        let image_download_size_bytes = if runtime.image_download_size_bytes > 0 {
+            runtime.image_download_size_bytes
+        } else {
+            variant.image_download_size_bytes
+        };
         let image_downloaded_bytes = if matches!(runtime.state.as_str(), "ready" | "running") {
             image_download_size_bytes
         } else {
@@ -4696,6 +4698,7 @@ mod tests {
         actions: Mutex<Vec<String>>,
         fail_start: Mutex<HashSet<String>>,
         missing_variants: Mutex<HashSet<String>>,
+        override_status: Mutex<Option<RuntimeProvisionStatus>>,
     }
 
     #[async_trait]
@@ -4734,6 +4737,9 @@ mod tests {
         }
 
         async fn runtime_status(&self, variant_id: &str) -> Result<RuntimeProvisionStatus> {
+            if let Some(status) = self.override_status.lock().await.clone() {
+                return Ok(status);
+            }
             Ok(RuntimeProvisionStatus {
                 state: if self.missing_variants.lock().await.contains(variant_id) {
                     "missing"
@@ -5049,6 +5055,30 @@ mod tests {
         .unwrap();
         assert_eq!(status.image_downloaded_bytes, 42);
         assert_eq!(status.image_download_size_bytes, 100);
+    }
+
+    #[tokio::test]
+    async fn observed_image_total_replaces_catalog_estimate() {
+        let mut catalog = test_catalog("http://127.0.0.1:9".into());
+        catalog.backends[0].variants[0].image_download_size_bytes = 1000;
+        let control = Arc::new(FakeControl::default());
+        *control.override_status.lock().await = Some(RuntimeProvisionStatus {
+            state: "missing".into(),
+            image_download_size_bytes: 100,
+            image_downloaded_bytes: 42,
+            ..RuntimeProvisionStatus::default()
+        });
+        let lab = LabController::with_control(
+            catalog,
+            cpu_hardware(),
+            runtime::runtime_from(test_config()),
+            control,
+            true,
+        )
+        .unwrap();
+        let status = lab.module_status("asr-a").await.unwrap();
+        assert_eq!(status.image_download_size_bytes, 100);
+        assert_eq!(status.image_downloaded_bytes, 42);
     }
 
     #[tokio::test]

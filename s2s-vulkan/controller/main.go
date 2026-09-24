@@ -86,7 +86,7 @@ type controller struct {
 	dataVolume   string
 	bundleDigest string
 	pullMu       sync.RWMutex
-	imagePulls   map[string]int64
+	imagePulls   map[string]dockerPullProgress
 }
 
 type dockerInspect struct {
@@ -494,20 +494,25 @@ func (c *controller) getModule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	c.pullMu.RLock()
-	downloaded := c.imagePulls[runtime.Image]
+	pull := c.imagePulls[runtime.Image]
 	c.pullMu.RUnlock()
-	if state == "ready" || state == "running" {
-		downloaded = runtime.ImageDownloadSizeBytes
+	imageSize := runtime.ImageDownloadSizeBytes
+	if pull.total > 0 {
+		imageSize = pull.total
 	}
-	if runtime.ImageDownloadSizeBytes > 0 && downloaded > runtime.ImageDownloadSizeBytes {
-		downloaded = runtime.ImageDownloadSizeBytes
+	downloaded := pull.downloaded
+	if state == "ready" || state == "running" {
+		downloaded = imageSize
+	}
+	if imageSize > 0 && downloaded > imageSize {
+		downloaded = imageSize
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"variant_id":                runtime.VariantID,
 		"container":                 runtime.Container,
 		"state":                     state,
 		"image":                     runtime.Image,
-		"image_download_size_bytes": runtime.ImageDownloadSizeBytes,
+		"image_download_size_bytes": imageSize,
 		"image_downloaded_bytes":    downloaded,
 	})
 }
@@ -760,9 +765,9 @@ func (c *controller) dockerRequest(ctx context.Context, method, path string, bod
 func (c *controller) pullImage(ctx context.Context, image string) error {
 	c.pullMu.Lock()
 	if c.imagePulls == nil {
-		c.imagePulls = make(map[string]int64)
+		c.imagePulls = make(map[string]dockerPullProgress)
 	}
-	c.imagePulls[image] = 0
+	c.imagePulls[image] = dockerPullProgress{}
 	c.pullMu.Unlock()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker/"+dockerAPIVer+"/images/create?fromImage="+url.QueryEscape(image), nil)
 	if err != nil {
@@ -808,11 +813,12 @@ func (c *controller) pullImage(ctx context.Context, image string) error {
 		if message != "" {
 			return fmt.Errorf("pull runtime image: %s", message)
 		}
-		if downloaded := updateDockerLayerProgress(layers, event.ID, event.Status, event.ProgressDetail.Current, event.ProgressDetail.Total); downloaded >= 0 {
+		if progress, ok := updateDockerLayerProgress(layers, event.ID, event.Status, event.ProgressDetail.Current, event.ProgressDetail.Total); ok {
 			c.pullMu.Lock()
-			if downloaded > c.imagePulls[image] {
-				c.imagePulls[image] = downloaded
-			}
+			previous := c.imagePulls[image]
+			previous.downloaded = max(previous.downloaded, progress.downloaded)
+			previous.total = max(previous.total, progress.total)
+			c.imagePulls[image] = previous
 			c.pullMu.Unlock()
 		}
 	}
@@ -827,9 +833,14 @@ type dockerLayerProgress struct {
 	total   int64
 }
 
-func updateDockerLayerProgress(layers map[string]dockerLayerProgress, id, status string, current, total int64) int64 {
+type dockerPullProgress struct {
+	downloaded int64
+	total      int64
+}
+
+func updateDockerLayerProgress(layers map[string]dockerLayerProgress, id, status string, current, total int64) (dockerPullProgress, bool) {
 	if id == "" {
-		return -1
+		return dockerPullProgress{}, false
 	}
 	state := layers[id]
 	if strings.EqualFold(status, "Download complete") || strings.EqualFold(status, "Pull complete") {
@@ -842,14 +853,15 @@ func updateDockerLayerProgress(layers map[string]dockerLayerProgress, id, status
 			state.total = total
 		}
 	} else {
-		return -1
+		return dockerPullProgress{}, false
 	}
 	layers[id] = state
-	var downloaded int64
+	var progress dockerPullProgress
 	for _, layer := range layers {
-		downloaded += layer.current
+		progress.downloaded += layer.current
+		progress.total += layer.total
 	}
-	return downloaded
+	return progress, true
 }
 
 func writeDockerError(w http.ResponseWriter, status int, body []byte) {

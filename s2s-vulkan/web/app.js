@@ -1004,15 +1004,17 @@ async function apiRequest(url, options = {}) {
   throw new Error(message);
 }
 
-function setModelDialogProgress(downloaded, total) {
+function setModelDialogProgress(downloaded, total, minimumPercent = 0, maximumPercent = 100) {
   const safeTotal = Math.max(0, Number(total || 0));
   const safeDownloaded = Math.max(0, Number(downloaded || 0));
-  const percent = safeTotal > 0 ? Math.min(100, (safeDownloaded / safeTotal) * 100) : 0;
+  const measured = safeTotal > 0 ? (safeDownloaded / safeTotal) * 100 : 0;
+  const percent = Math.min(maximumPercent, Math.max(minimumPercent, measured));
   if (els.modelProgressFill) els.modelProgressFill.style.width = `${percent}%`;
   if (els.modelProgressLabel) {
     els.modelProgressLabel.textContent =
       `${Math.round(percent)} % · ${formatBytes(safeDownloaded)} / ${formatBytes(safeTotal)}`;
   }
+  return percent;
 }
 
 function resetModelDialog() {
@@ -1217,6 +1219,8 @@ async function waitForModuleInstall(opt) {
     maxDownloaded: Math.max(0, Number(opt.downloadedBytes || 0)),
     modelBytes: opt.downloadSizeBytes,
     totalBytes: opt.downloadSizeBytes + opt.imageDownloadSizeBytes,
+    maxPercent: 0,
+    moduleInstall: true,
   };
   activeModelDownload = token;
   els.modelDialogTitle.textContent = `${opt.name} wird installiert`;
@@ -1227,7 +1231,7 @@ async function waitForModuleInstall(opt) {
   els.modelProgress.hidden = false;
   els.modelDialogConfirm.hidden = true;
   els.modelDialogCancel.textContent = "Installation abbrechen";
-  setModelDialogProgress(token.maxDownloaded, token.totalBytes);
+  token.maxPercent = setModelDialogProgress(token.maxDownloaded, token.totalBytes, 0, 99);
   if (!els.modelDialog.open) els.modelDialog.showModal();
   els.modelDialog.oncancel = (event) => event.preventDefault();
   els.modelDialogCancel.onclick = async () => {
@@ -1250,21 +1254,24 @@ async function waitForModuleInstall(opt) {
     while (!token.cancelled) {
       await new Promise((resolve) => window.setTimeout(resolve, 500));
       const current = await apiRequest(`/api/v1/modules/${encodeURIComponent(opt.id)}/install`);
-      const downloaded = Number(current.model_downloaded_bytes || 0) +
-        Number(current.image_downloaded_bytes || 0);
-      if (!token.totalBytes) {
-        token.totalBytes = Number(current.model_total_bytes || 0) + Number(current.image_download_size_bytes || 0);
+      const imageLoaded = Number(current.image_downloaded_bytes || 0);
+      const imageTotal = Number(current.image_download_size_bytes || 0);
+      const modelTotal = Number(current.model_total_bytes || token.modelBytes || 0);
+      const downloaded = Number(current.model_downloaded_bytes || 0) + imageLoaded;
+      if (imageLoaded > 0 && imageTotal > 0) {
+        token.totalBytes = modelTotal + imageTotal;
+      } else if (!token.totalBytes) {
+        token.totalBytes = modelTotal + imageTotal;
       }
       token.maxDownloaded = Math.max(token.maxDownloaded, Math.min(downloaded, token.totalBytes));
-      setModelDialogProgress(token.maxDownloaded, token.totalBytes);
+      token.maxPercent = setModelDialogProgress(token.maxDownloaded, token.totalBytes, token.maxPercent, 99);
       if (current.model_state === "installed" && current.runtime_state === "missing") {
         token.imagePhase = true;
         els.modelDialogCopy.textContent =
           "Modell installiert. Das signierte Laufzeit-Image wird vorbereitet und geladen. Die aktive Pipeline bleibt unverändert.";
         if (els.modelProgressLabel) {
-          const imageLoaded = Number(current.image_downloaded_bytes || 0);
           els.modelProgressLabel.textContent = imageLoaded > 0
-            ? `Modell geladen: ${formatBytes(Number(current.model_downloaded_bytes || 0))} · Image: ${formatBytes(imageLoaded)} / ${formatBytes(opt.imageDownloadSizeBytes)}`
+            ? `Modell geladen: ${formatBytes(Number(current.model_downloaded_bytes || 0))} · Image: ${formatBytes(imageLoaded)} geladen`
             : `Modell geladen: ${formatBytes(Number(current.model_downloaded_bytes || 0))} · Laufzeit-Image wird vorbereitet`;
         }
       }
@@ -2548,7 +2555,11 @@ function handlePipelineEvent(raw) {
       const token = activeModelDownload;
       const modelDownloaded = Math.min(Number(msg.downloaded || 0), token.modelBytes || total);
       token.maxDownloaded = Math.max(token.maxDownloaded, modelDownloaded);
-      setModelDialogProgress(token.maxDownloaded, token.totalBytes || total);
+      if (token.moduleInstall) {
+        token.maxPercent = setModelDialogProgress(token.maxDownloaded, token.totalBytes || total, token.maxPercent, 99);
+      } else {
+        setModelDialogProgress(token.maxDownloaded, token.totalBytes || total);
+      }
     }
     setHint(`Download ${msg.artifact || msg.backend_id}: ${percent}%`, { sticky: true });
     return;

@@ -36,18 +36,19 @@ func testController(t *testing.T, docker http.Handler) *controller {
 func TestDockerLayerProgressDeduplicatesEvents(t *testing.T) {
 	layers := make(map[string]dockerLayerProgress)
 	steps := []struct {
-		id, status           string
-		current, total, want int64
+		id, status                                string
+		current, total, wantDownloaded, wantTotal int64
 	}{
-		{"layer-a", "Downloading", 40, 100, 40},
-		{"layer-b", "Downloading", 20, 50, 60},
-		{"layer-a", "Downloading", 30, 100, 60},
-		{"layer-a", "Download complete", 0, 0, 120},
-		{"layer-b", "Downloading", 50, 50, 150},
+		{"layer-a", "Downloading", 40, 100, 40, 100},
+		{"layer-b", "Downloading", 20, 50, 60, 150},
+		{"layer-a", "Downloading", 30, 100, 60, 150},
+		{"layer-a", "Download complete", 0, 0, 120, 150},
+		{"layer-b", "Downloading", 50, 50, 150, 150},
 	}
 	for _, step := range steps {
-		if got := updateDockerLayerProgress(layers, step.id, step.status, step.current, step.total); got != step.want {
-			t.Fatalf("layer progress = %d, want %d", got, step.want)
+		got, ok := updateDockerLayerProgress(layers, step.id, step.status, step.current, step.total)
+		if !ok || got.downloaded != step.wantDownloaded || got.total != step.wantTotal {
+			t.Fatalf("layer progress = %+v, ok %t; want %d / %d", got, ok, step.wantDownloaded, step.wantTotal)
 		}
 	}
 }
@@ -57,7 +58,7 @@ func TestModuleStatusReportsImagePullBytes(t *testing.T) {
 	runtime := c.byVariant["parakeet-cpu"]
 	runtime.ImageDownloadSizeBytes = 100
 	c.byVariant[runtime.VariantID] = runtime
-	c.imagePulls = map[string]int64{runtime.Image: 42}
+	c.imagePulls = map[string]dockerPullProgress{runtime.Image: {downloaded: 42, total: 50}}
 	server := httptest.NewServer(c.routes())
 	defer server.Close()
 	req, _ := http.NewRequest(http.MethodGet, server.URL+"/s2s/modules/parakeet-cpu", nil)
@@ -68,13 +69,17 @@ func TestModuleStatusReportsImagePullBytes(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	var status struct {
-		ImageDownloadedBytes int64 `json:"image_downloaded_bytes"`
+		ImageDownloadedBytes   int64 `json:"image_downloaded_bytes"`
+		ImageDownloadSizeBytes int64 `json:"image_download_size_bytes"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		t.Fatal(err)
 	}
 	if status.ImageDownloadedBytes != 42 {
 		t.Fatalf("image bytes = %d, want 42", status.ImageDownloadedBytes)
+	}
+	if status.ImageDownloadSizeBytes != 50 {
+		t.Fatalf("image total = %d, want observed 50 instead of estimated 100", status.ImageDownloadSizeBytes)
 	}
 }
 
@@ -105,14 +110,14 @@ func TestRuntimeImagePullPublishesLiveBytes(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for {
 		c.pullMu.RLock()
-		loaded := c.imagePulls[image]
+		progress := c.imagePulls[image]
 		c.pullMu.RUnlock()
-		if loaded == 42 {
+		if progress.downloaded == 42 && progress.total == 100 {
 			break
 		}
 		if time.Now().After(deadline) {
 			close(release)
-			t.Fatalf("live image bytes = %d, want 42", loaded)
+			t.Fatalf("live image progress = %+v, want 42 / 100", progress)
 		}
 		time.Sleep(time.Millisecond)
 	}
