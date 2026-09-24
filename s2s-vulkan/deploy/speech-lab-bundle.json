@@ -79,14 +79,14 @@
       "role": "llm",
       "image": "llm",
       "health_path": "/health",
-      "port": 8081,
+      "port": 8080,
       "command": [
         "-m",
         "/opt/s2s-models/granite-3.3-2b-instruct-q4_k_m.gguf",
         "--host",
         "0.0.0.0",
         "--port",
-        "8081",
+        "8080",
         "-c",
         "2048",
         "--alias",
@@ -149,13 +149,17 @@
         "--tts-url",
         "http://supertonic:8083/v1/audio/speech",
         "--llm-base-url",
-        "http://llama-fallback:8081/v1",
+        "http://llama-fallback:8080/v1",
         "--whisper-url",
         "http://confucius-asr:8082",
         "--stt-api",
         "openai",
         "--stt-model",
         "confucius4-r2t2"
+      ],
+      "environment": [
+        "S2S_AURAGO_PRESTARTED_CONFUCIUS=1",
+        "S2S_AURAGO_PRESTARTED_LLM=1"
       ]
     },
     {
@@ -1382,77 +1386,6 @@
         "shm_bytes": 268435456,
         "gpu_count": 1,
         "vram_gb": 1.5
-      },
-      "license": "",
-      "auth_required": false
-    },
-    {
-      "backend_id": "supertonic",
-      "variant_id": "supertonic-cpu",
-      "stage": "tts",
-      "container": "s2s-supertonic",
-      "image": "ghcr.io/antibyte/s2s-vulkan@sha256:0000000000000000000000000000000000000000000000000000000000000000",
-      "image_key": "gateway",
-      "image_download_size_bytes": 320000000,
-      "architectures": [
-        "amd64"
-      ],
-      "accelerator": "cpu",
-      "experimental": false,
-      "command": [
-        "--mode",
-        "tts-server",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8083",
-        "--skip-health",
-        "--supertonic-model-dir",
-        "/opt/s2s-models/supertonic/onnx",
-        "--supertonic-voice",
-        "M1",
-        "--tts-sample-rate",
-        "16000"
-      ],
-      "environment": {},
-      "aliases": [
-        "supertonic"
-      ],
-      "model_mounts": [
-        "/models"
-      ],
-      "network": {
-        "name": "aurago-speech-lab",
-        "internal_only": true
-      },
-      "volumes": [
-        {
-          "name": "aurago-speech-lab-models",
-          "targets": [
-            "/models"
-          ],
-          "read_only": true
-        },
-        {
-          "name": "aurago-speech-lab-data",
-          "targets": [
-            "/data"
-          ],
-          "read_only": false
-        }
-      ],
-      "healthcheck": {
-        "path": "/health",
-        "port": 8083,
-        "timeout_seconds": 5,
-        "interval_seconds": 3
-      },
-      "resources": {
-        "memory_bytes": 2147483648,
-        "nano_cpus": 2000000000,
-        "shm_bytes": 268435456,
-        "gpu_count": 0,
-        "vram_gb": 0.0
       },
       "license": "",
       "auth_required": false

@@ -23,3 +23,7 @@ LABEL s2s.lab.bundled-model="mradermacher/Confucius4-R2T2-GGUF@a5b8b2d84b7a429ba
       s2s.lab.bundled-bytes="1463115264" \
       s2s.lab.model-license="netease-model-use-license-agreement" \
       s2s.lab.model-license-files="/opt/s2s-models/MODEL_LICENSE,/opt/s2s-models/MODEL_LICENSE_zh"
+
+# The upstream server image probes port 8080; managed ASR listens on 8082.
+HEALTHCHECK --interval=5s --timeout=5s --start-period=30s \
+    CMD curl -fsS http://127.0.0.1:8082/health || exit 1

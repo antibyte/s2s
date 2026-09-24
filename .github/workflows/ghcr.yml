@@ -197,6 +197,115 @@ jobs:
             docker buildx build --platform linux/amd64 --provenance=true --sbom=false --push \
               -t "ghcr.io/$owner/$repository:$TAG" -f "$dockerfile" "$@" s2s-vulkan
           }
+          if [[ "$GITHUB_REF_NAME" == "v0.2.13-speech-lab" ]]; then
+            # The gateway, browser UI, and Whisper source changed since the
+            # signed v0.2.10 bundle. Preserve every unchanged pinned sidecar.
+            build s2s-whisper-fw s2s-vulkan/docker/Dockerfile.whisper
+            docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push \
+              -t "ghcr.io/$owner/s2s-web:$TAG" -f s2s-vulkan/web/Dockerfile s2s-vulkan/web
+            previous_tag=sha-38e0b5af867195fa9a5eba52a00eb54ed5ec5091
+            mapfile -t unchanged_repositories < <(python - <<'PY'
+          import json
+          with open("s2s-vulkan/deploy/speech-lab-bundle.json", encoding="utf-8") as fh:
+              images = json.load(fh)["images"]
+          changed = {"gateway", "web", "whisper"}
+          for repository in sorted({ref.split("/", 2)[-1].split("@", 1)[0]
+                                    for key, ref in images.items() if key not in changed}):
+              print(repository)
+          PY
+            )
+            for repository in "${unchanged_repositories[@]}"; do
+              docker buildx imagetools create \
+                -t "ghcr.io/$owner/$repository:$TAG" \
+                "ghcr.io/$owner/$repository:$previous_tag"
+            done
+            exit 0
+          fi
+          if [[ "$GITHUB_REF_NAME" == "v0.2.10-speech-lab" ]]; then
+            # Refresh the gateway and browser UI; reuse the signed v0.2.7 sidecars.
+            docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push \
+              -t "ghcr.io/$owner/s2s-web:$TAG" -f s2s-vulkan/web/Dockerfile s2s-vulkan/web
+            previous_tag=sha-557ccf7e1209d47c859fa0ec7f2a5237b20d27ed
+            mapfile -t unchanged_repositories < <(python - <<'PY'
+          import json
+          with open("s2s-vulkan/deploy/speech-lab-bundle.json", encoding="utf-8") as fh:
+              images = json.load(fh)["images"]
+          for repository in sorted({ref.split("/", 2)[-1].split("@", 1)[0]
+                                    for key, ref in images.items() if key not in {"gateway", "web"}}):
+              print(repository)
+          PY
+            )
+            for repository in "${unchanged_repositories[@]}"; do
+              docker buildx imagetools create \
+                -t "ghcr.io/$owner/$repository:$TAG" \
+                "ghcr.io/$owner/$repository:$previous_tag"
+            done
+            exit 0
+          fi
+          if [[ "$GITHUB_REF_NAME" == "v0.2.8-speech-lab" || "$GITHUB_REF_NAME" == "v0.2.9-speech-lab" ]]; then
+            # Only the gateway changes; reuse the signed v0.2.7 sidecars.
+            previous_tag=sha-557ccf7e1209d47c859fa0ec7f2a5237b20d27ed
+            mapfile -t unchanged_repositories < <(python - <<'PY'
+          import json
+          with open("s2s-vulkan/deploy/speech-lab-bundle.json", encoding="utf-8") as fh:
+              images = json.load(fh)["images"]
+          for repository in sorted({ref.split("/", 2)[-1].split("@", 1)[0]
+                                    for key, ref in images.items() if key != "gateway"}):
+              print(repository)
+          PY
+            )
+            for repository in "${unchanged_repositories[@]}"; do
+              docker buildx imagetools create \
+                -t "ghcr.io/$owner/$repository:$TAG" \
+                "ghcr.io/$owner/$repository:$previous_tag"
+            done
+            exit 0
+          fi
+          if [[ "$GITHUB_REF_NAME" == "v0.2.7-speech-lab" ]]; then
+            # Only the gateway changes; reuse the signed v0.2.6 sidecars.
+            previous_tag=sha-f20fc389665f53c9615d9c57c117d66c2b4eb1e3
+            mapfile -t unchanged_repositories < <(python - <<'PY'
+          import json
+          with open("s2s-vulkan/deploy/speech-lab-bundle.json", encoding="utf-8") as fh:
+              images = json.load(fh)["images"]
+          for repository in sorted({ref.split("/", 2)[-1].split("@", 1)[0]
+                                    for key, ref in images.items() if key != "gateway"}):
+              print(repository)
+          PY
+            )
+            for repository in "${unchanged_repositories[@]}"; do
+              docker buildx imagetools create \
+                -t "ghcr.io/$owner/$repository:$TAG" \
+                "ghcr.io/$owner/$repository:$previous_tag"
+            done
+            exit 0
+          fi
+          if [[ "$GITHUB_REF_NAME" == "v0.2.6-speech-lab" ]]; then
+            # This hotfix changes only the gateway catalog and the three Confucius
+            # healthchecks. Re-tag the other images from the signed v0.2.4 bundle.
+            previous_tag=sha-7e488b961c1e05b49cb36d06bf51159cccbb05a1
+            build s2s-asr-confucius-cpu s2s-vulkan/docker/Dockerfile.confucius
+            build s2s-asr-confucius-cuda s2s-vulkan/docker/Dockerfile.confucius \
+              --build-arg LLAMA_BASE_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:bfb3264fc2166e01e2b4f9b537e45d7006d87c75021b911f132ef607f5bbced3
+            build s2s-asr-confucius-vulkan s2s-vulkan/docker/Dockerfile.confucius \
+              --build-arg LLAMA_BASE_IMAGE=ghcr.io/ggml-org/llama.cpp:server-vulkan@sha256:e3ec7c0cd473df7dfff299a60a0f292bf5c3e6a5202286484f896819eca6d6ed
+            mapfile -t unchanged_repositories < <(python - <<'PY'
+          import json
+          with open("s2s-vulkan/deploy/speech-lab-bundle.json", encoding="utf-8") as fh:
+              images = json.load(fh)["images"]
+          changed = {"gateway", "confucius_cpu", "confucius_cuda", "confucius_vulkan"}
+          for repository in sorted({ref.split("/", 2)[-1].split("@", 1)[0]
+                                    for key, ref in images.items() if key not in changed}):
+              print(repository)
+          PY
+            )
+            for repository in "${unchanged_repositories[@]}"; do
+              docker buildx imagetools create \
+                -t "ghcr.io/$owner/$repository:$TAG" \
+                "ghcr.io/$owner/$repository:$previous_tag"
+            done
+            exit 0
+          fi
           build s2s-speech-lab-controller s2s-vulkan/docker/Dockerfile.controller
           build s2s-whisper-fw s2s-vulkan/docker/Dockerfile.whisper
           build s2s-asr-confucius-cpu s2s-vulkan/docker/Dockerfile.confucius
