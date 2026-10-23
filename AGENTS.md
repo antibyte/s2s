@@ -65,6 +65,8 @@ This project is indexed by GitNexus as **s2s** (1337 symbols, 3484 relationships
   checked Phonon archives in a draft release; publish only after uploading the
   checksum and raw Ed25519 signature. Never change live stack/chat settings as
   a side effect of publication.
+- Workflow dispatch `target=gateway` updates only gateway image tags (including
+  `latest` on main); it leaves sidecar images and published bundles untouched.
 - Verify `cargo test --release --locked`, `go test ./...` in `controller/`,
   `python -m unittest discover -s tests -p test_speech_resources.py`, and real
   offline Phonon sidecar/gateway synthesis plus Granite CPU transcription.

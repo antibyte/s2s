@@ -27,6 +27,7 @@ on:
         options:
           - all
           - controller
+          - gateway
 
 env:
   REGISTRY: ghcr.io
@@ -175,7 +176,7 @@ jobs:
           sbom: true
 
       - name: Fetch verified Phonon release resources
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && inputs.target != 'gateway'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -189,7 +190,7 @@ jobs:
             --output "$RUNNER_TEMP/verified-phonon"
 
       - name: Build and push managed sidecar images
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && inputs.target != 'gateway'
         env:
           OWNER: ${{ github.repository_owner }}
           TAG: sha-${{ github.sha }}
@@ -435,7 +436,7 @@ jobs:
             -t "ghcr.io/$owner/s2s-web:$TAG" -f s2s-vulkan/web/Dockerfile s2s-vulkan/web
 
       - name: Publish bundle manifest
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && inputs.target != 'gateway'
         env:
           OWNER: ${{ github.repository_owner }}
           SHA: ${{ github.sha }}
