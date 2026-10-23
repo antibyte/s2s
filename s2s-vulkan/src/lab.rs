@@ -4760,6 +4760,7 @@ mod tests {
                 model: "a".into(),
                 default_voice: String::new(),
                 voices: vec![],
+                voice_labels: BTreeMap::new(),
                 voice_mode: VoiceMode::Fixed,
                 native_sample_rate: 0,
                 languages: vec![],
@@ -4812,6 +4813,7 @@ mod tests {
                 String::new()
             },
             voices: vec![],
+            voice_labels: BTreeMap::new(),
             voice_mode: VoiceMode::Fixed,
             native_sample_rate: 0,
             languages: vec![],
@@ -5068,6 +5070,92 @@ mod tests {
         assert!(!result.ok);
         assert_eq!(before.asr, after.asr);
         assert_eq!(before.whisper_url, after.whisper_url);
+    }
+
+    #[tokio::test]
+    async fn granite_download_rejects_corruption_and_cancellation_then_resumes_atomically() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let app = axum::Router::new()
+                .route("/corrupt", axum::routing::get(|| async { "xxxxxx" }))
+                .route(
+                    "/model",
+                    axum::routing::get(|headers: axum::http::HeaderMap| async move {
+                        if headers.get("range").and_then(|v| v.to_str().ok()) == Some("bytes=2-") {
+                            (axum::http::StatusCode::PARTIAL_CONTENT, "cdef")
+                        } else {
+                            (axum::http::StatusCode::OK, "abcdef")
+                        }
+                    }),
+                );
+            axum::serve(listener, app).await.unwrap();
+        });
+        let catalog: BackendCatalog =
+            serde_json::from_str(include_str!("../config/backends.json")).unwrap();
+        let granite = catalog.find("granite-speech-5.0-2b").unwrap().clone();
+        let lab = LabController::with_control(
+            catalog,
+            cpu_hardware(),
+            runtime::runtime_from(test_config()),
+            Arc::new(FakeControl::default()),
+            false,
+        )
+        .unwrap();
+        let root =
+            std::env::temp_dir().join(format!("s2s-granite-download-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let path = root.join("granite.gguf");
+        let part = part_path(&path).unwrap();
+        tokio::fs::write(&path, b"previous").await.unwrap();
+        let mut artifact = granite.artifacts[0].clone();
+        artifact.source = format!("http://{address}/corrupt");
+        artifact.size = 6;
+        artifact.sha256 = hex::encode(Sha256::digest(b"abcdef"));
+        let cancel = AtomicBool::new(false);
+        assert!(lab
+            .download_one_artifact_attempt(&granite, &artifact, &path, &part, 0, 6, &cancel, None)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("SHA-256"));
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"previous");
+        assert!(!part.exists());
+        artifact.source = format!("http://{address}/model");
+        tokio::fs::write(&part, b"ab").await.unwrap();
+        cancel.store(true, Ordering::Release);
+        assert!(lab
+            .download_one_artifact(&granite, &artifact, &path, 0, 6, &cancel, None)
+            .await
+            .is_err());
+        assert_eq!(tokio::fs::read(&part).await.unwrap(), b"ab");
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"previous");
+        cancel.store(false, Ordering::Release);
+        assert_eq!(
+            lab.download_one_artifact_attempt(
+                &granite, &artifact, &path, &part, 0, 6, &cancel, None
+            )
+            .await
+            .unwrap(),
+            6
+        );
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"abcdef");
+        assert!(!part.exists());
+        // A complete checkpoint promotes without a network request on retry.
+        tokio::fs::write(&part, b"abcdef").await.unwrap();
+        server.abort();
+        assert_eq!(
+            lab.download_one_artifact_attempt(
+                &granite, &artifact, &path, &part, 0, 6, &cancel, None
+            )
+            .await
+            .unwrap(),
+            6
+        );
+        assert!(artifact_matches(&path, artifact.size, &artifact.sha256)
+            .await
+            .unwrap());
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
 
     #[tokio::test]

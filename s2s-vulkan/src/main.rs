@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
 
     print_banner(&cfg, &gpu_report);
 
-    if !cfg.skip_health && !matches!(cfg.mode, Mode::TtsServer) {
+    if !cfg.skip_health && !matches!(cfg.mode, Mode::TtsServer | Mode::PhononTtsServer) {
         check_backends(&cfg).await;
     }
 
@@ -74,6 +74,7 @@ async fn main() -> Result<()> {
         Mode::Websocket | Mode::Lab => io::run_websocket_server(cfg, gpu_report).await?,
         Mode::Realtime => io::run_realtime_server(cfg).await?,
         Mode::TtsServer => tts::run_supertonic_server(cfg).await?,
+        Mode::PhononTtsServer => tts::phonon::run_server(cfg).await?,
     }
 
     Ok(())

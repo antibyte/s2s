@@ -1,0 +1,162 @@
+{
+  "runtime_version": "0.4.0",
+  "model_revision": "1537ce46c64f42903e0d608b132ccb073dac46d2",
+  "voices_revision": "0ee17205f254b5abc43b266c8a0f215565c352f7",
+  "model_files": [
+    {
+      "name": "config.json",
+      "size": 4674,
+      "sha256": "e312ab694d5ec1f79ccea520a2eeec989969ce07e9b4189ae7e9ad8e035ef82e",
+      "git_blob_sha1": "5ddd955511e851a1f8c744ac23b69eb6000565d5"
+    },
+    {
+      "name": "default-voice.safetensors",
+      "size": 256136,
+      "sha256": "dc537478eaadc1a5257fcda2e3501ab81e14c111a5d95a5838f350db2afd0f1a",
+      "git_blob_sha1": ""
+    },
+    {
+      "name": "model.q8.gguf",
+      "size": 74553568,
+      "sha256": "96fa067813244e0c6c5997b98ec2596b65ec8574b14916b48e97db056ff97e27",
+      "git_blob_sha1": ""
+    },
+    {
+      "name": "tokenizer.json",
+      "size": 277749,
+      "sha256": "a5e8c6060bf927ed367314f21355148fdf4acff6fadb94e49c86bc7182449433",
+      "git_blob_sha1": "e2d7bebf27916234f26883ad8e55c5219d0ae148"
+    }
+  ],
+  "bundle_id": "0.4.0-1537ce46c64f-0ee17205f254",
+  "resource_release": "v0.2.19-speech-lab",
+  "voices": [
+    {
+      "id": "NbpkqMVS3CJeq2j8",
+      "name": "Zoey",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "female",
+      "filename": "voices/NbpkqMVS3CJeq2j8.safetensors",
+      "size": 256136,
+      "sha256": "97c7f8c253413574406ab80dd23f49c3ebb2517163b00a9bf86b9c4cf43e7e23",
+      "bundled": true
+    },
+    {
+      "id": "LMDIYE0Oa377Qh6Z",
+      "name": "Easton",
+      "language": "en",
+      "locale": "en-us",
+      "gender": "male",
+      "filename": "voices/LMDIYE0Oa377Qh6Z.safetensors",
+      "size": 256136,
+      "sha256": "45c582673cb20edb04ddcca2b5a8865ddfb0a82599efadb269021e87d20fbdd4",
+      "bundled": true
+    },
+    {
+      "id": "b6FvJAiokjdqIti4",
+      "name": "Noa",
+      "language": "es",
+      "locale": "es-es",
+      "gender": "female",
+      "filename": "voices/b6FvJAiokjdqIti4.safetensors",
+      "size": 256136,
+      "sha256": "0bc37938a306a35f6c9f8ea53ccca14c5fc8b5575850f0cd15b352f4c3ce826e",
+      "bundled": true
+    },
+    {
+      "id": "jvPx8j8zLGQ3utZz",
+      "name": "Marcos",
+      "language": "es",
+      "locale": "es-es",
+      "gender": "male",
+      "filename": "voices/jvPx8j8zLGQ3utZz.safetensors",
+      "size": 256136,
+      "sha256": "be8c5f329070f40c39007bea13cee9503fe71599704cfe55c67d6eb51f5e6eb2",
+      "bundled": true
+    },
+    {
+      "id": "2A2fFf8SkDEJ8nzx",
+      "name": "Nele",
+      "language": "de",
+      "locale": "de-de",
+      "gender": "female",
+      "filename": "voices/2A2fFf8SkDEJ8nzx.safetensors",
+      "size": 256136,
+      "sha256": "5d5ad59fdd4642cd162f082873b27f658705a5d8598957d6274b30bf4bd4dc0b",
+      "bundled": true
+    },
+    {
+      "id": "3ZKKapPOvuWFcw9f",
+      "name": "Anton",
+      "language": "de",
+      "locale": "de-de",
+      "gender": "male",
+      "filename": "voices/3ZKKapPOvuWFcw9f.safetensors",
+      "size": 256136,
+      "sha256": "b645c79148a02f6cd2ef7a6b3658373166e19a9a1c49fb81408be5d79667e6cb",
+      "bundled": true
+    },
+    {
+      "id": "FXxJ9mANRq6BCTX5",
+      "name": "Noémie",
+      "language": "fr",
+      "locale": "fr-fr",
+      "gender": "female",
+      "filename": "voices/FXxJ9mANRq6BCTX5.safetensors",
+      "size": 256136,
+      "sha256": "9f575447f6908727214c2a855e0e33a7c316e9360a0d8b66c6ccaa8f6e15dade",
+      "bundled": true
+    },
+    {
+      "id": "Tek4tJXiX6_yvXq7",
+      "name": "Augustin",
+      "language": "fr",
+      "locale": "fr-fr",
+      "gender": "male",
+      "filename": "voices/Tek4tJXiX6_yvXq7.safetensors",
+      "size": 256136,
+      "sha256": "0106f9a0d53685471695a76827f7912e6c890f21fea10b5e5160379da38ffe5b",
+      "bundled": true
+    },
+    {
+      "id": "KgC2Nqnjj48NUiyV",
+      "name": "Manuela-Lu",
+      "language": "pt",
+      "locale": "pt-br",
+      "gender": "female",
+      "filename": "voices/KgC2Nqnjj48NUiyV.safetensors",
+      "size": 256136,
+      "sha256": "f6b455eec3ad536c2c8b7b2f18a5620cb46ebf7576a040299fce4de6376ad3a3",
+      "bundled": true
+    },
+    {
+      "id": "NuUr_x5V90hSHzCJ",
+      "name": "Davi",
+      "language": "pt",
+      "locale": "pt-br",
+      "gender": "male",
+      "filename": "voices/NuUr_x5V90hSHzCJ.safetensors",
+      "size": 256136,
+      "sha256": "593c8c56619008116b30d7ad1bae5433d6834060b5b757e51799574601badd99",
+      "bundled": true
+    }
+  ],
+  "runtime": {
+    "name": "runtime/linux_amd64/ptts",
+    "size": 30184240,
+    "sha256": "de9f6ea78e14321eefa00e86dd77896ed37edfa0d4bd47fb98a24ff74c595929"
+  },
+  "packages": [
+    {
+      "name": "phonon-model.dat",
+      "size": 66906184,
+      "sha256": "17eb0eeed83691e9c697baa1ee35dfc889a949ccd05e6a8ae0c16b216c93c352"
+    },
+    {
+      "name": "phonon-runtime_linux_amd64.dat",
+      "size": 9333723,
+      "sha256": "8e70df2ea136ea87f8a074e329d9c83d7a102c90c1ba3e218f7912184f09495e"
+    }
+  ]
+}

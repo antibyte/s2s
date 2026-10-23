@@ -117,6 +117,7 @@ jobs:
       - name: Validate bundle-v2 catalog matrix
         run: |
           python s2s-vulkan/scripts/speech_lab_bundle.py
+          python -m unittest discover -s s2s-vulkan/tests -p test_speech_resources.py
           cd s2s-vulkan/controller
           go test ./...
 
@@ -173,11 +174,27 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Fetch verified Phonon release resources
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release=$(python -c 'import json; print(json.load(open("s2s-vulkan/config/phonon.json"))["resource_release"])')
+          mkdir -p s2s-vulkan/deploy/phonon
+          gh release download "$release" --repo "$GITHUB_REPOSITORY" \
+            --pattern phonon-model.dat --pattern phonon-runtime_linux_amd64.dat \
+            --dir s2s-vulkan/deploy/phonon
+          python s2s-vulkan/scripts/prepare_phonon.py --packages s2s-vulkan/deploy/phonon \
+            --output "$RUNNER_TEMP/verified-phonon"
+
       - name: Build and push managed sidecar images
         if: github.event_name != 'pull_request'
         env:
           OWNER: ${{ github.repository_owner }}
           TAG: sha-${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GATEWAY_IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
         run: |
           set -euo pipefail
           owner=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
@@ -197,6 +214,37 @@ jobs:
             docker buildx build --platform linux/amd64 --provenance=true --sbom=false --push \
               -t "ghcr.io/$owner/$repository:$TAG" -f "$dockerfile" "$@" s2s-vulkan
           }
+          build s2s-tts-phonon s2s-vulkan/docker/Dockerfile.phonon \
+            --build-arg GATEWAY_IMAGE="$GATEWAY_IMAGE"
+          build s2s-asr-granite-speech-cpu s2s-vulkan/docker/Dockerfile.granite-speech
+          build s2s-asr-granite-speech-cuda s2s-vulkan/docker/Dockerfile.granite-speech \
+            --build-arg LLAMA_BASE_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:490d8cd8000203a3ab8fdfce14ef931e2aa85affd4dd4447bcc75f299f00fd9a
+          build s2s-asr-granite-speech-vulkan s2s-vulkan/docker/Dockerfile.granite-speech \
+            --build-arg LLAMA_BASE_IMAGE=ghcr.io/ggml-org/llama.cpp:server-vulkan@sha256:a644fb651975d9dea49140302577a3b945993fd5efd3400bf89c7d525d03c103
+          if [[ "$GITHUB_REF_NAME" == "v0.2.19-speech-lab" ]]; then
+            # Unchanged sidecars retain the digests of the checked v0.2.18 bundle.
+            docker buildx build --platform linux/amd64 --provenance=true --sbom=true --push \
+              -t "ghcr.io/$owner/s2s-web:$TAG" -f s2s-vulkan/web/Dockerfile s2s-vulkan/web
+            gh release download v0.2.18-speech-lab --repo "$GITHUB_REPOSITORY" \
+              --pattern speech-lab-bundle.json --dir "$RUNNER_TEMP/previous-bundle"
+            echo "3fea572a02aaf7ed49698922275e6ee04af1acaa0075aa02bc0296f3605f1fd1  $RUNNER_TEMP/previous-bundle/speech-lab-bundle.json" | sha256sum -c -
+            python - "$RUNNER_TEMP/previous-bundle/speech-lab-bundle.json" > "$RUNNER_TEMP/unchanged-images" <<'PY'
+          import json, sys
+          with open(sys.argv[1], encoding="utf-8") as source:
+              previous = json.load(source)["images"]
+          with open("s2s-vulkan/deploy/speech-lab-bundle.json", encoding="utf-8") as source:
+              current = json.load(source)["images"]
+          changed = {"gateway", "web", "phonon", "granite_speech_cpu", "granite_speech_cuda", "granite_speech_vulkan"}
+          for key in current.keys() - changed:
+              ref = previous[key]
+              repository = ref.split("/", 2)[-1].split("@", 1)[0]
+              print(repository, ref)
+          PY
+            while read -r repository ref; do
+              docker buildx imagetools create -t "ghcr.io/$owner/$repository:$TAG" "$ref"
+            done < "$RUNNER_TEMP/unchanged-images"
+            exit 0
+          fi
           if [[ "$GITHUB_REF_NAME" == "v0.2.15-speech-lab" ]]; then
             # The managed catalog opt-in and browser warning change only the
             # gateway configuration and Web UI. Reuse signed sidecar images.
@@ -443,6 +491,7 @@ jobs:
             [[ "$(wc -c < speech-lab-bundle.json.sig)" -eq 64 ]] || { echo "Speech Lab manifest signature has an invalid size" >&2; exit 1; }
             gh release create "${GITHUB_REF_NAME}" --generate-notes || true
             gh release upload "${GITHUB_REF_NAME}" speech-lab-bundle.json speech-lab-bundle.json.sha256 speech-lab-bundle.json.sig --clobber
+            gh release edit "${GITHUB_REF_NAME}" --draft=false --latest
           fi
 
       - name: Summary

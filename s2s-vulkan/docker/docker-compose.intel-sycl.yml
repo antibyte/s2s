@@ -5,6 +5,13 @@
 # Requires host Intel GPU + /dev/dri. Not for Windows Docker Desktop + Arc.
 
 services:
+  granite-speech-vulkan:
+    extends:
+      file: docker/docker-compose.linux-gpu.yml
+      service: granite-speech-vulkan
+    build:
+      context: .
+
   s2s:
     environment:
       S2S_GPU: ${S2S_GPU:-auto}

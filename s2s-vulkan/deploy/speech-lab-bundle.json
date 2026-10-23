@@ -10,6 +10,10 @@
     "confucius_cpu": "ghcr.io/antibyte/s2s-asr-confucius-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "confucius_cuda": "ghcr.io/antibyte/s2s-asr-confucius-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "confucius_vulkan": "ghcr.io/antibyte/s2s-asr-confucius-vulkan@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "granite_speech_cpu": "ghcr.io/antibyte/s2s-asr-granite-speech-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "granite_speech_cuda": "ghcr.io/antibyte/s2s-asr-granite-speech-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "granite_speech_vulkan": "ghcr.io/antibyte/s2s-asr-granite-speech-vulkan@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "phonon": "ghcr.io/antibyte/s2s-tts-phonon@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "parakeet_cpu": "ghcr.io/antibyte/s2s-asr-parakeet-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "parakeet_cuda": "ghcr.io/antibyte/s2s-asr-parakeet-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "voxtral_cpu": "ghcr.io/antibyte/s2s-asr-voxtral-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
@@ -158,9 +162,9 @@
         "confucius4-r2t2"
       ],
       "environment": [
+        "S2S_ALLOW_EXPERIMENTAL=true",
         "S2S_AURAGO_PRESTARTED_CONFUCIUS=1",
-        "S2S_AURAGO_PRESTARTED_LLM=1",
-        "S2S_ALLOW_EXPERIMENTAL=true"
+        "S2S_AURAGO_PRESTARTED_LLM=1"
       ]
     },
     {
@@ -771,6 +775,228 @@
       "auth_required": false
     },
     {
+      "backend_id": "granite-speech-5.0-2b",
+      "variant_id": "granite-speech-5.0-2b-cpu",
+      "stage": "asr",
+      "container": "s2s-granite-speech-cpu",
+      "image": "ghcr.io/antibyte/s2s-asr-granite-speech-cpu@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "granite_speech_cpu",
+      "image_download_size_bytes": 180000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cpu",
+      "experimental": false,
+      "command": [
+        "-m",
+        "/models/granite-speech-5.0-2b/granite-speech-5.0-2b.i1-Q4_K_M.gguf",
+        "--mmproj",
+        "/models/granite-speech-5.0-2b/granite-speech-5.0-2b.mmproj-Q8_0.gguf",
+        "--alias",
+        "granite-speech-5.0-2b",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8082",
+        "-c",
+        "4096",
+        "-ngl",
+        "0",
+        "--threads",
+        "2"
+      ],
+      "environment": {},
+      "aliases": [
+        "granite-speech-cpu"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 6442450944,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 1073741824,
+        "gpu_count": 0,
+        "vram_gb": 4.0
+      },
+      "license": "Apache-2.0",
+      "auth_required": false
+    },
+    {
+      "backend_id": "granite-speech-5.0-2b",
+      "variant_id": "granite-speech-5.0-2b-cuda",
+      "stage": "asr",
+      "container": "s2s-granite-speech-cuda",
+      "image": "ghcr.io/antibyte/s2s-asr-granite-speech-cuda@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "granite_speech_cuda",
+      "image_download_size_bytes": 1800000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cuda",
+      "experimental": false,
+      "command": [
+        "-m",
+        "/models/granite-speech-5.0-2b/granite-speech-5.0-2b.i1-Q4_K_M.gguf",
+        "--mmproj",
+        "/models/granite-speech-5.0-2b/granite-speech-5.0-2b.mmproj-Q8_0.gguf",
+        "--alias",
+        "granite-speech-5.0-2b",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8082",
+        "-c",
+        "4096",
+        "-ngl",
+        "99",
+        "--threads",
+        "2"
+      ],
+      "environment": {},
+      "aliases": [
+        "granite-speech-cuda"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 6442450944,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 1073741824,
+        "gpu_count": 1,
+        "vram_gb": 4.0
+      },
+      "license": "Apache-2.0",
+      "auth_required": false
+    },
+    {
+      "backend_id": "granite-speech-5.0-2b",
+      "variant_id": "granite-speech-5.0-2b-vulkan",
+      "stage": "asr",
+      "container": "s2s-granite-speech-vulkan",
+      "image": "ghcr.io/antibyte/s2s-asr-granite-speech-vulkan@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "granite_speech_vulkan",
+      "image_download_size_bytes": 380000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "vulkan",
+      "experimental": false,
+      "command": [
+        "-m",
+        "/models/granite-speech-5.0-2b/granite-speech-5.0-2b.i1-Q4_K_M.gguf",
+        "--mmproj",
+        "/models/granite-speech-5.0-2b/granite-speech-5.0-2b.mmproj-Q8_0.gguf",
+        "--alias",
+        "granite-speech-5.0-2b",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8082",
+        "-c",
+        "4096",
+        "-ngl",
+        "99",
+        "--threads",
+        "2"
+      ],
+      "environment": {},
+      "aliases": [
+        "granite-speech-vulkan"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8082,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 6442450944,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 1073741824,
+        "gpu_count": 1,
+        "vram_gb": 4.0
+      },
+      "license": "Apache-2.0",
+      "auth_required": false
+    },
+    {
       "backend_id": "higgs-tts-3-4b",
       "variant_id": "higgs-tts-3-4b-cuda",
       "stage": "tts",
@@ -1147,6 +1373,75 @@
         "vram_gb": 3.5
       },
       "license": "",
+      "auth_required": false
+    },
+    {
+      "backend_id": "phonon-40m-multilingual",
+      "variant_id": "phonon-40m-multilingual-cpu",
+      "stage": "tts",
+      "container": "s2s-phonon",
+      "image": "ghcr.io/antibyte/s2s-tts-phonon@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "image_key": "phonon",
+      "image_download_size_bytes": 200000000,
+      "architectures": [
+        "amd64"
+      ],
+      "accelerator": "cpu",
+      "experimental": false,
+      "command": [
+        "--mode",
+        "phonon-tts-server",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8083",
+        "--gpu",
+        "cpu",
+        "--skip-health",
+        "--phonon-resource-dir",
+        "/opt/s2s-models/phonon"
+      ],
+      "environment": {},
+      "aliases": [
+        "phonon"
+      ],
+      "model_mounts": [
+        "/models"
+      ],
+      "network": {
+        "name": "aurago-speech-lab",
+        "internal_only": true
+      },
+      "volumes": [
+        {
+          "name": "aurago-speech-lab-models",
+          "targets": [
+            "/models"
+          ],
+          "read_only": true
+        },
+        {
+          "name": "aurago-speech-lab-data",
+          "targets": [
+            "/data"
+          ],
+          "read_only": false
+        }
+      ],
+      "healthcheck": {
+        "path": "/health",
+        "port": 8083,
+        "timeout_seconds": 5,
+        "interval_seconds": 3
+      },
+      "resources": {
+        "memory_bytes": 1073741824,
+        "nano_cpus": 2000000000,
+        "shm_bytes": 268435456,
+        "gpu_count": 0,
+        "vram_gb": 0.0
+      },
+      "license": "MIT, CC-BY-NC-4.0",
       "auth_required": false
     },
     {

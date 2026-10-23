@@ -15,6 +15,8 @@ pub enum Mode {
     Realtime,
     /// OpenAI-compatible Supertonic HTTP sidecar.
     TtsServer,
+    /// Offline native Phonon CPU HTTP sidecar.
+    PhononTtsServer,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq, Default)]
@@ -236,6 +238,14 @@ pub struct Config {
     /// Directory containing Supertonic ONNX assets (`duration_predictor.onnx`, …).
     #[arg(long, default_value = None, env = "S2S_SUPERTONIC_MODEL_DIR")]
     pub supertonic_model_dir: Option<PathBuf>,
+
+    /// Verified immutable Phonon resources, outside the writable model volume.
+    #[arg(
+        long,
+        default_value = "/opt/s2s-models/phonon",
+        env = "S2S_PHONON_RESOURCE_DIR"
+    )]
+    pub phonon_resource_dir: PathBuf,
 
     /// Preset voice name (e.g. M1, F1) or path to style JSON.
     #[arg(long, default_value = "M1", env = "S2S_SUPERTONIC_VOICE")]

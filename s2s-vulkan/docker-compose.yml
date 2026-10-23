@@ -235,6 +235,43 @@ services:
       # ONNX graph optimization can take roughly two minutes on Docker Desktop.
       start_period: 180s
 
+  phonon:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.phonon
+      args:
+        GATEWAY_IMAGE: ${IMAGE:-ghcr.io/${GHCR_OWNER:-local}/s2s-vulkan}:${TAG:-latest}
+    image: ${PHONON_IMAGE:-s2s-tts-phonon:local}
+    container_name: s2s-phonon
+    profiles: ["managed"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: tts
+      backend-id: phonon-40m-multilingual
+    environment:
+      S2S_TTS_LANGUAGE: ${S2S_TTS_LANGUAGE:-de}
+    networks:
+      - s2s
+    restart: unless-stopped
+
+  granite-speech-cpu:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.granite-speech
+    image: ${GRANITE_SPEECH_CPU_IMAGE:-s2s-asr-granite-speech:cpu}
+    container_name: s2s-granite-speech-cpu
+    profiles: ["managed"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: asr
+      backend-id: granite-speech-5.0-2b
+    command: ["-m", "/models/granite-speech-5.0-2b/granite-speech-5.0-2b.i1-Q4_K_M.gguf", "--mmproj", "/models/granite-speech-5.0-2b/granite-speech-5.0-2b.mmproj-Q8_0.gguf", "--alias", "granite-speech-5.0-2b", "--host", "0.0.0.0", "--port", "8082", "-c", "4096", "-ngl", "0", "--threads", "2"]
+    volumes:
+      - models:/models:ro
+    networks:
+      - s2s
+    restart: unless-stopped
+
   # faster-whisper (CTranslate2) — same quality path as the pre-Docker lab server.
   # whisper.cpp was hallucinating on short VAD clips ("* Musik *", garbage German).
   whisper:

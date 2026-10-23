@@ -42,3 +42,30 @@ This project is indexed by GitNexus as **s2s** (1337 symbols, 3484 relationships
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+## Speech Lab runtime and release ownership
+
+- `s2s-vulkan/config/backends.json` owns backend IDs, voice IDs/labels, protocols,
+  immutable model artifacts and hardware variants. Confucius/Supertonic remain
+  defaults; new entries never overwrite persisted stack/voice choices.
+- `src/tts/phonon.rs` owns the native Phonon HTTP sidecar. Keep its 2,000-character,
+  120-second, one-process, two-thread and 16-MiB limits, disconnect cancellation,
+  WAV validation and private temporary cleanup. `config/phonon.json` pins every
+  model, voice, runtime and release package. Do not put HF tokens in build assets.
+- `scripts/prepare_phonon.py` verifies/extracts the existing AuraGo resources;
+  Python is build-only. Phonon resources stay outside `/models` so model-volume
+  mounts cannot hide them. Model weights retain CC BY-NC 4.0.
+- Granite Speech uses the requested i1-Q4_K_M GGUF and the static Q8_0 projector,
+  downloaded by the existing consent/hash/atomic-install path. Keep CPU/CUDA/
+  Vulkan llama.cpp base images pinned by digest. Never silently change precision.
+- Regenerate `deploy/speech-lab-bundle.json` only with
+  `python scripts/speech_lab_bundle.py --write`, then run it without `--write`.
+  Runtime image keys must also be recognized by AuraGo's managed-bundle adapter.
+- `.github/workflows/ghcr.yml` owns GHCR and signed bundle-v2 publication. Stage
+  checked Phonon archives in a draft release; publish only after uploading the
+  checksum and raw Ed25519 signature. Never change live stack/chat settings as
+  a side effect of publication.
+- Verify `cargo test --release --locked`, `go test ./...` in `controller/`,
+  `python -m unittest discover -s tests -p test_speech_resources.py`, and real
+  offline Phonon sidecar/gateway synthesis plus Granite CPU transcription.
+  Report separately whether CUDA/Vulkan had physical hardware coverage.

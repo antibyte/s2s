@@ -75,7 +75,7 @@ AuraGo integration (capability profile, suggestions, planned gateway) is documen
 
 `Confucius4-R2T2 Q4_K_M`, Supertonic and Granite 3.3 2B Q4 are immutable parts of
 their respective images and form the first active stack. All other weights are
-absent in a fresh model volume. Selecting one opens a size confirmation; only
+absent in a fresh model volume, except the optional bundled Phonon TTS. Selecting an unbundled model opens a size confirmation; only
 after approval does the controller download it. A running download can be
 cancelled, and an installed model can be deleted again while it is inactive:
 
@@ -114,6 +114,67 @@ NVIDIA, explicit SYCL variants on Intel (Qwen), then CPU. Published experimental
 variants are selectable when `S2S_ALLOW_EXPERIMENTAL=true`. AuraGo's signed
 managed bundle enables them, and the Browser Lab warns before installation or
 activation. Unpublished runtimes remain unavailable.
+
+### Phonon 40M multilingual TTS
+
+`phonon-40m-multilingual` is an optional native CPU sidecar using
+[`ptts v0.4.0`](https://github.com/gradium-ai/xn-ptts/tree/v0.4.0). Its image
+includes the pinned `0.4.0-1537ce46c64f-0ee17205f254` resources and ten voices;
+neither Python, PyTorch nor a Hugging Face login is needed at runtime. Supertonic
+remains the default. Select Phonon and a voice in the Lab; the next request uses
+that voice without restarting the container. The catalog default is **Nele**.
+
+| Language | Female | Male |
+| --- | --- | --- |
+| German | Nele | Anton |
+| English | Zoey | Easton |
+| French | Noémie | Augustin |
+| Spanish | Noa | Marcos |
+| Portuguese | Manuela-Lu | Davi |
+
+Voice values are the same official IDs as AuraGo's Phonon catalog. The HTTP
+sidecar accepts `wav` or `pcm` (mono PCM16, 24 kHz), 1–2,000 characters and
+German/English/French/Spanish/Portuguese language tags (regional tags normalize
+to their base language). It permits one synthesis at a time, two CPU threads,
+120 seconds including queue time and 16 MiB WAV output. Disconnects cancel the
+child process and remove its private output directory. The official Linux
+amd64 binary needs an x86-64-v3 CPU (AVX2/FMA/F16C).
+
+Bundled files live at `/opt/s2s-models/phonon`, outside the persistent `/models`
+mount. Builds verify the two release archives and every model/runtime/voice
+file against [`config/phonon.json`](config/phonon.json). To build locally,
+download `phonon-model.dat` and `phonon-runtime_linux_amd64.dat` from
+[v0.2.19-speech-lab](https://github.com/antibyte/s2s/releases/tag/v0.2.19-speech-lab)
+into the ignored `deploy/phonon/` folder, build the gateway, then build
+`docker/Dockerfile.phonon` with `GATEWAY_IMAGE` pointing to that gateway image.
+The final Phonon image contains no build-time Python interpreter.
+
+**Phonon's model weights are CC BY-NC 4.0, for noncommercial use.** Runtime
+code is MIT; the image preserves the original license texts in
+`/opt/s2s-models/phonon/licences/`. See [license notes](docs/speech-model-licenses.md).
+
+### Granite Speech 5.0 2B i1-Q4_K_M ASR
+
+`granite-speech-5.0-2b` is an optional `openai-asr` backend with pinned
+llama.cpp CPU, CUDA and Vulkan images. Confucius remains the default. The
+existing download dialog installs exactly **1,950,119,008 bytes** (~1.95 GB):
+
+| File | Repository revision |
+| --- | --- |
+| `granite-speech-5.0-2b.i1-Q4_K_M.gguf` | `mradermacher/granite-speech-5.0-2b-i1-GGUF@90042534335e69d091e682a5c6ced21148f79535` |
+| `granite-speech-5.0-2b.mmproj-Q8_0.gguf` | `mradermacher/granite-speech-5.0-2b-GGUF@e02703d20cf54007c2a5ff6f8dbf923ad26a7519` |
+
+Both files have fixed SHA-256 hashes in `config/backends.json`. They remain in
+`/models/granite-speech-5.0-2b/` across image updates and work offline after
+installation. No model download runs before the existing confirmation dialog.
+Supported languages: English, French, German, Spanish, Portuguese and Japanese.
+The public gateway remains `/v1/audio/transcriptions`; the alias is always the
+catalog ID, independent of the GGUF filename.
+
+The exact requested i1-Q4_K_M quantization is retained. IBM recommends Q8 for
+maximum accuracy; lower precision can reduce recognition quality, especially
+for recordings longer than about a minute. This Lab entry is not an accuracy
+benchmark. See the [IBM model notes](https://huggingface.co/ibm-granite/granite-speech-5.0-2b#usage-with-llamacpp).
 
 ### NVIDIA Parakeet ASR
 

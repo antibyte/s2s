@@ -10,6 +10,14 @@ s2s-Lab becomes a speech sidecar for [AuraGo](https://github.com/antibyte/AuraGo
 
 No matrix benchmarks are required on the happy path.
 
+The optional `phonon-40m-multilingual` TTS and `granite-speech-5.0-2b` ASR
+entries retain the same public gateway API. Bundle v0.2.19 adds image keys
+`phonon`, `granite_speech_cpu`, `granite_speech_cuda`, `granite_speech_vulkan`;
+AuraGo's `ImageSet`, `imageValues` and `imageByKey` must recognize all four
+before accepting this release. Older AuraGo binaries reject these unknown
+keys during signed-bundle validation. Updating or publishing a bundle never
+changes the active stack or the chat-output switch.
+
 ## Roles
 
 | Component | Responsibility |

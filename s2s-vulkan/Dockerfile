@@ -31,7 +31,9 @@ RUN mkdir -p src \
 
 COPY src ./src
 COPY config ./config
-RUN cargo build --release \
+COPY scripts/host_idle_agent.ps1 scripts/host_idle_agent.ps1
+RUN cargo test --release --locked \
+    && cargo build --release --locked \
     && strip target/release/s2s-vulkan
 
 # ── bundled Supertonic model ────────────────────────────────────────

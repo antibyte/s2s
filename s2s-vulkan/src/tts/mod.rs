@@ -3,6 +3,7 @@
 //! Supertonic is in-process Rust + ONNX Runtime (not GGML/Vulkan).
 //! Qwen3 Vulkan remains available via `--tts http` / external qwentts server.
 
+pub(crate) mod phonon;
 mod supertonic;
 #[allow(dead_code, unused_imports, clippy::all)]
 mod supertonic_helper;

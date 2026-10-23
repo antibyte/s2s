@@ -170,7 +170,11 @@ impl Drop for TurnPauseGuard {
 
 fn infer_asr_id(cfg: &Config) -> String {
     let url = cfg.whisper_url.to_ascii_lowercase();
-    if url.contains("confucius") {
+    if url.contains("granite-speech")
+        || (matches!(cfg.stt_api, SttApi::Openai) && cfg.stt_model == "granite-speech-5.0-2b")
+    {
+        "granite-speech-5.0-2b".into()
+    } else if url.contains("confucius") {
         "confucius4-r2t2".into()
     } else if url.contains("voxtral") || url.contains(":8087") {
         "voxtral-mini-4b-realtime".into()
@@ -198,7 +202,9 @@ fn infer_tts_id(cfg: &Config) -> String {
         TtsBackend::Http => {
             let u = cfg.tts_url.to_ascii_lowercase();
             let m = cfg.tts_model.to_ascii_lowercase();
-            if u.contains("8091") || m.contains("xtts") || u.contains("xtts") {
+            if m == crate::tts::phonon::MODEL_ID || u.contains("phonon") {
+                crate::tts::phonon::MODEL_ID.into()
+            } else if u.contains("8091") || m.contains("xtts") || u.contains("xtts") {
                 "xtts-v2".into()
             } else if u.contains("8084") || m.contains("kokoro") || u.contains("kokoro") {
                 "kokoro".into()
@@ -453,6 +459,15 @@ fn apply_asr(rt: &mut RuntimeState, id: &str) -> Option<String> {
     rt.asr_id = id.to_string();
     rt.cfg.stt_api = SttApi::Whisper;
     match id {
+        "granite-speech-5.0-2b" => {
+            rt.cfg.whisper_url = "http://127.0.0.1:8082".into();
+            rt.cfg.stt_api = SttApi::Openai;
+            rt.cfg.stt_model = id.into();
+            Some(format!(
+                "ASR → Granite Speech 5.0 i1-Q4_K_M @ {}",
+                rt.cfg.whisper_url
+            ))
+        }
         "confucius4-r2t2" => {
             rt.cfg.whisper_url = "http://127.0.0.1:8082".into();
             rt.cfg.stt_api = SttApi::Openai;
@@ -510,6 +525,19 @@ fn is_kokoro_voice(name: &str) -> bool {
 fn apply_tts(rt: &mut RuntimeState, id: &str) -> Option<String> {
     rt.tts_id = id.to_string();
     match id {
+        "phonon-40m-multilingual" => {
+            rt.cfg.tts = TtsBackend::Http;
+            rt.cfg.tts_url = "http://127.0.0.1:8083/v1/audio/speech".into();
+            rt.cfg.tts_model = crate::tts::phonon::MODEL_ID.into();
+            rt.cfg.tts_native_sample_rate = 24_000;
+            if !crate::tts::phonon::has_voice(&rt.cfg.supertonic_voice) {
+                rt.cfg.supertonic_voice = crate::tts::phonon::DEFAULT_VOICE.into();
+            }
+            Some(format!(
+                "TTS → Phonon CPU (voice={})",
+                rt.cfg.supertonic_voice
+            ))
+        }
         "supertonic" => {
             rt.cfg.tts = TtsBackend::Supertonic;
             rt.cfg.tts_model = "tts".into();
@@ -694,6 +722,33 @@ pub(crate) async fn reload_whisper_model(base_url: &str, model: &str) -> anyhow:
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[tokio::test]
+    async fn phonon_and_granite_are_inferred_without_changing_existing_mappings() {
+        let runtime = runtime_from(Config::parse_from(["s2s-vulkan"]));
+        let mut state = runtime.write().await;
+        apply_asr(&mut state, "granite-speech-5.0-2b");
+        assert_eq!(infer_asr_id(&state.cfg), "granite-speech-5.0-2b");
+        assert!(matches!(state.cfg.stt_api, SttApi::Openai));
+        apply_tts(&mut state, crate::tts::phonon::MODEL_ID);
+        assert_eq!(infer_tts_id(&state.cfg), crate::tts::phonon::MODEL_ID);
+        assert_eq!(state.cfg.tts_native_sample_rate, 24_000);
+        assert_eq!(
+            state.cfg.supertonic_voice,
+            crate::tts::phonon::DEFAULT_VOICE
+        );
+        state.cfg.supertonic_voice = "3ZKKapPOvuWFcw9f".into();
+        apply_tts(&mut state, crate::tts::phonon::MODEL_ID);
+        assert_eq!(state.cfg.supertonic_voice, "3ZKKapPOvuWFcw9f");
+        apply_asr(&mut state, "confucius4-r2t2");
+        assert_eq!(state.cfg.stt_model, "confucius4-r2t2");
+        apply_tts(&mut state, "supertonic");
+        assert_eq!(infer_tts_id(&state.cfg), "supertonic");
+        assert_eq!(state.cfg.supertonic_voice, "M1");
+        apply_asr(&mut state, "granite-speech-5.0-2b");
+        apply_asr(&mut state, "fw-base");
+        assert_eq!(infer_asr_id(&state.cfg), "fw-base");
+    }
 
     #[tokio::test]
     async fn turn_pause_rejects_new_turns_and_waits_for_existing_turn() {

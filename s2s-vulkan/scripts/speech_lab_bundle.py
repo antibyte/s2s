@@ -22,6 +22,10 @@ IMAGES = {
     "confucius_cpu": ("s2s-asr-confucius-cpu", 1_800_000_000),
     "confucius_cuda": ("s2s-asr-confucius-cuda", 5_000_000_000),
     "confucius_vulkan": ("s2s-asr-confucius-vulkan", 2_200_000_000),
+    "granite_speech_cpu": ("s2s-asr-granite-speech-cpu", 180_000_000),
+    "granite_speech_cuda": ("s2s-asr-granite-speech-cuda", 1_800_000_000),
+    "granite_speech_vulkan": ("s2s-asr-granite-speech-vulkan", 380_000_000),
+    "phonon": ("s2s-tts-phonon", 200_000_000),
     "parakeet_cpu": ("s2s-asr-parakeet-cpu", 2_800_000_000),
     "parakeet_cuda": ("s2s-asr-parakeet-cuda", 7_500_000_000),
     "voxtral_cpu": ("s2s-asr-voxtral-cpu", 3_200_000_000),
@@ -49,6 +53,10 @@ def image_key(variant: dict) -> str:
         return "whisper"
     if image.startswith("s2s-asr-confucius:"):
         return f"confucius_{accel}"
+    if image.startswith("s2s-asr-granite-speech:"):
+        return f"granite_speech_{accel}"
+    if image.startswith("s2s-tts-phonon:"):
+        return "phonon"
     if image.startswith("s2s-asr-parakeet:"):
         return f"parakeet_{'cuda' if accel == 'cuda' else 'cpu'}"
     if image.startswith("s2s-asr-voxtral:"):
@@ -82,6 +90,18 @@ def image_ref(key: str) -> str:
 
 
 def runtime_command(backend_id: str, accelerator: str = "") -> list[str]:
+    if backend_id == "granite-speech-5.0-2b":
+        return [
+            "-m", "/models/granite-speech-5.0-2b/granite-speech-5.0-2b.i1-Q4_K_M.gguf",
+            "--mmproj", "/models/granite-speech-5.0-2b/granite-speech-5.0-2b.mmproj-Q8_0.gguf",
+            "--alias", backend_id, "--host", "0.0.0.0", "--port", "8082",
+            "-c", "4096", "-ngl", "0" if accelerator == "cpu" else "99", "--threads", "2",
+        ]
+    if backend_id == "phonon-40m-multilingual":
+        return [
+            "--mode", "phonon-tts-server", "--host", "0.0.0.0", "--port", "8083",
+            "--gpu", "cpu", "--skip-health", "--phonon-resource-dir", "/opt/s2s-models/phonon",
+        ]
     if backend_id == "confucius4-r2t2":
         return [
             "-m", "/opt/s2s-models/confucius4-r2t2.Q4_K_M.gguf",

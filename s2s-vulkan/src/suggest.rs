@@ -464,6 +464,7 @@ mod tests {
                     String::new()
                 },
                 voices: vec![],
+                voice_labels: Default::default(),
                 voice_mode: crate::registry::VoiceMode::Fixed,
                 native_sample_rate: 0,
                 languages: langs.iter().map(|s| (*s).into()).collect(),

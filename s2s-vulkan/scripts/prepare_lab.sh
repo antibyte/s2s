@@ -48,6 +48,10 @@ optional_containers=(
   s2s-parakeet-cpu
   s2s-parakeet-cuda
   s2s-parakeet-xpu
+  s2s-phonon
+  s2s-granite-speech-cpu
+  s2s-granite-speech-cuda
+  s2s-granite-speech-vulkan
   s2s-tts-qwen-vulkan
   s2s-tts-qwen-sycl-aot
   s2s-tts-qwen-sycl-jit

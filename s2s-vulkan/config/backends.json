@@ -86,6 +86,106 @@
       ]
     },
     {
+      "id": "granite-speech-5.0-2b",
+      "stage": "asr",
+      "name": "Granite Speech 5.0 2B · i1-Q4_K_M",
+      "tag": "GGUF",
+      "description": "IBM multilingual ASR via native llama.cpp. Pinned mradermacher i1-Q4_K_M weights with Q8_0 audio projector (~1.95 GB); downloads require approval. Lower-bit quantization can reduce accuracy on long audio.",
+      "protocol": "openai-asr",
+      "model": "granite-speech-5.0-2b",
+      "languages": [
+        "auto",
+        "en",
+        "fr",
+        "de",
+        "es",
+        "pt",
+        "ja"
+      ],
+      "licenses": [
+        "Apache-2.0"
+      ],
+      "resources": {
+        "vram_gb": 4,
+        "ram_gb": 6,
+        "stars": {
+          "cpu": 4,
+          "gpu": 3,
+          "vram": 3
+        }
+      },
+      "bundled": false,
+      "artifacts": [
+        {
+          "source": "https://huggingface.co/mradermacher/granite-speech-5.0-2b-i1-GGUF/resolve/90042534335e69d091e682a5c6ced21148f79535/granite-speech-5.0-2b.i1-Q4_K_M.gguf?download=true",
+          "path": "granite-speech-5.0-2b/granite-speech-5.0-2b.i1-Q4_K_M.gguf",
+          "size": 1139248096,
+          "sha256": "88cc76bcdcea28f23bbd7d143cb9a9589e03a2582ec8d52e825406293103900b"
+        },
+        {
+          "source": "https://huggingface.co/mradermacher/granite-speech-5.0-2b-GGUF/resolve/e02703d20cf54007c2a5ff6f8dbf923ad26a7519/granite-speech-5.0-2b.mmproj-Q8_0.gguf?download=true",
+          "path": "granite-speech-5.0-2b/granite-speech-5.0-2b.mmproj-Q8_0.gguf",
+          "size": 810870912,
+          "sha256": "87b291a653a343c5ec861ff1d8458577b38777d4d8764ee482cc148181fd17bc"
+        }
+      ],
+      "variants": [
+        {
+          "id": "granite-speech-5.0-2b-cuda",
+          "accelerator": "cuda",
+          "vendors": [
+            "nvidia"
+          ],
+          "platforms": [
+            "linux"
+          ],
+          "stable": true,
+          "published": true,
+          "container": "s2s-granite-speech-cuda",
+          "image": "s2s-asr-granite-speech:cuda",
+          "endpoint": "http://granite-speech-cuda:8082",
+          "health_path": "/health",
+          "environment": {}
+        },
+        {
+          "id": "granite-speech-5.0-2b-vulkan",
+          "accelerator": "vulkan",
+          "vendors": [
+            "amd",
+            "intel",
+            "nvidia"
+          ],
+          "platforms": [
+            "linux"
+          ],
+          "stable": true,
+          "published": true,
+          "container": "s2s-granite-speech-vulkan",
+          "image": "s2s-asr-granite-speech:vulkan",
+          "endpoint": "http://granite-speech-vulkan:8082",
+          "health_path": "/health",
+          "environment": {}
+        },
+        {
+          "id": "granite-speech-5.0-2b-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux"
+          ],
+          "stable": true,
+          "published": true,
+          "container": "s2s-granite-speech-cpu",
+          "image": "s2s-asr-granite-speech:cpu",
+          "endpoint": "http://granite-speech-cpu:8082",
+          "health_path": "/health",
+          "environment": {}
+        }
+      ]
+    },
+    {
       "id": "fw-tiny",
       "stage": "asr",
       "name": "faster-whisper tiny",
@@ -3386,6 +3486,83 @@
             "S2S_AUDIO8_DEVICE": "cpu"
           },
           "host_profile": "audio8-python"
+        }
+      ]
+    },
+    {
+      "id": "phonon-40m-multilingual",
+      "stage": "tts",
+      "name": "Phonon 40M multilingual",
+      "tag": "CPU",
+      "description": "Local native CPU speech in DE/EN/FR/ES/PT. Ten bundled voices; no Python, PyTorch or Hugging Face login. Model weights are CC BY-NC 4.0 (noncommercial use only).",
+      "protocol": "openai-tts",
+      "model": "phonon-40m-multilingual",
+      "default_voice": "2A2fFf8SkDEJ8nzx",
+      "voices": [
+        "NbpkqMVS3CJeq2j8",
+        "LMDIYE0Oa377Qh6Z",
+        "b6FvJAiokjdqIti4",
+        "jvPx8j8zLGQ3utZz",
+        "2A2fFf8SkDEJ8nzx",
+        "3ZKKapPOvuWFcw9f",
+        "FXxJ9mANRq6BCTX5",
+        "Tek4tJXiX6_yvXq7",
+        "KgC2Nqnjj48NUiyV",
+        "NuUr_x5V90hSHzCJ"
+      ],
+      "voice_labels": {
+        "NbpkqMVS3CJeq2j8": "Zoey · en-us",
+        "LMDIYE0Oa377Qh6Z": "Easton · en-us",
+        "b6FvJAiokjdqIti4": "Noa · es-es",
+        "jvPx8j8zLGQ3utZz": "Marcos · es-es",
+        "2A2fFf8SkDEJ8nzx": "Nele · de-de",
+        "3ZKKapPOvuWFcw9f": "Anton · de-de",
+        "FXxJ9mANRq6BCTX5": "Noémie · fr-fr",
+        "Tek4tJXiX6_yvXq7": "Augustin · fr-fr",
+        "KgC2Nqnjj48NUiyV": "Manuela-Lu · pt-br",
+        "NuUr_x5V90hSHzCJ": "Davi · pt-br"
+      },
+      "voice_mode": "request",
+      "native_sample_rate": 24000,
+      "languages": [
+        "de",
+        "en",
+        "fr",
+        "es",
+        "pt"
+      ],
+      "licenses": [
+        "MIT",
+        "CC-BY-NC-4.0"
+      ],
+      "resources": {
+        "vram_gb": 0,
+        "ram_gb": 1,
+        "stars": {
+          "cpu": 2,
+          "gpu": 1,
+          "vram": 1
+        }
+      },
+      "bundled": true,
+      "artifacts": [],
+      "variants": [
+        {
+          "id": "phonon-40m-multilingual-cpu",
+          "accelerator": "cpu",
+          "vendors": [
+            "any"
+          ],
+          "platforms": [
+            "linux"
+          ],
+          "stable": true,
+          "published": true,
+          "container": "s2s-phonon",
+          "image": "s2s-tts-phonon:local",
+          "endpoint": "http://phonon:8083/v1/audio/speech",
+          "health_path": "/health",
+          "environment": {}
         }
       ]
     },

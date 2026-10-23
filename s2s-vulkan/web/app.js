@@ -136,7 +136,7 @@ const els = {
 /** @typedef {{ cpu: number, gpu: number, vram: number }} ResourceStars */
 /** @typedef {{ show: boolean, cpu: boolean, nvidia: boolean, intel: boolean, amd: boolean, vulkan: boolean }} GpuSupport */
 /** @typedef {{ id: string, label: string }} LanguageLabel */
-/** @typedef {{ id: string, stage: string, name: string, tag: string, desc: string, vramGb: number, stars: ResourceStars, gpuSupport: GpuSupport, languageLabels: LanguageLabel[], meta: string, available?: boolean, compatible: boolean, experimental: boolean, incompatibilityLabel: string, activatable: boolean, managedRuntime: boolean, variantId: string, installed: boolean, bundled: boolean, downloadState: string, downloadSizeBytes: number, downloadedBytes: number, imageDownloadSizeBytes: number, deletable: boolean, downloadError: string, defaultVoice: string, voices: string[], voiceMode: "request"|"restart"|"fixed", licenses: string[], accessUrl: string, authRequired?: boolean, hfTokenConfigured?: boolean, runtimeState: string, runtimeReason: string, env?: Record<string,string>, note?: string }} EngineOpt */
+/** @typedef {{ id: string, stage: string, name: string, tag: string, desc: string, vramGb: number, stars: ResourceStars, gpuSupport: GpuSupport, languageLabels: LanguageLabel[], meta: string, available?: boolean, compatible: boolean, experimental: boolean, incompatibilityLabel: string, activatable: boolean, managedRuntime: boolean, variantId: string, installed: boolean, bundled: boolean, downloadState: string, downloadSizeBytes: number, downloadedBytes: number, imageDownloadSizeBytes: number, deletable: boolean, downloadError: string, defaultVoice: string, voices: string[], voiceLabels?: Record<string,string>, voiceMode: "request"|"restart"|"fixed", licenses: string[], accessUrl: string, authRequired?: boolean, hfTokenConfigured?: boolean, runtimeState: string, runtimeReason: string, env?: Record<string,string>, note?: string }} EngineOpt */
 
 /** Model choices and presets are populated exclusively from /api/v1/catalog. */
 /** @type {EngineOpt[]} */
@@ -502,6 +502,7 @@ function catalogOption(entry) {
     voiceMode: ["request", "restart", "fixed"].includes(entry.voice_mode)
       ? entry.voice_mode
       : "fixed",
+    voiceLabels: entry.voice_labels || {},
     licenses,
     accessUrl,
     authRequired,
@@ -1559,7 +1560,7 @@ function renderVoicePicker(tts) {
     ...voices.map((voice) => {
       const option = document.createElement("option");
       option.value = voice;
-      option.textContent = voice.replaceAll("_", " ");
+      option.textContent = tts?.voiceLabels?.[voice] || voice.replaceAll("_", " ");
       return option;
     })
   );

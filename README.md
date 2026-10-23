@@ -18,6 +18,12 @@ cargo build --release
 
 Ausführliche Vulkan-Build-Anleitung, Architektur und CLI: **[s2s-vulkan/README.md](s2s-vulkan/README.md)**.
 
+Speech Lab bietet zusätzlich **Phonon 40M multilingual** (lokale CPU, zehn
+enthaltene Stimmen) und **Granite Speech 5.0 2B i1-Q4_K_M** (CPU/CUDA/Vulkan,
+Modelldownload nach Bestätigung). Confucius und Supertonic bleiben die Standards.
+Phonon ist nichtkommerziell lizenziert. Einrichtung und Grenzen:
+[Speech Lab](s2s-vulkan/README.md#phonon-40m-multilingual-tts).
+
 ## Minimaler Smoke-Test (ohne Modelle)
 
 ```powershell

@@ -132,6 +132,8 @@ pub struct BackendDefinition {
     pub default_voice: String,
     #[serde(default)]
     pub voices: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub voice_labels: BTreeMap<String, String>,
     /// How callers may select a TTS voice. Missing metadata fails closed to
     /// `fixed` so external legacy catalogs never claim unsupported switching.
     #[serde(default)]

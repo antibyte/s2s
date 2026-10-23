@@ -7,6 +7,30 @@ x-dri-devices: &dri-devices
   - /dev/dri:/dev/dri
 
 services:
+  granite-speech-vulkan:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.granite-speech
+      args:
+        LLAMA_BASE_IMAGE: ghcr.io/ggml-org/llama.cpp:server-vulkan@sha256:a644fb651975d9dea49140302577a3b945993fd5efd3400bf89c7d525d03c103
+    image: ${GRANITE_SPEECH_VULKAN_IMAGE:-s2s-asr-granite-speech:vulkan}
+    container_name: s2s-granite-speech-vulkan
+    profiles: ["managed"]
+    labels:
+      s2s.lab.managed: "true"
+      stage: asr
+      backend-id: granite-speech-5.0-2b
+    command: ["-m", "/models/granite-speech-5.0-2b/granite-speech-5.0-2b.i1-Q4_K_M.gguf", "--mmproj", "/models/granite-speech-5.0-2b/granite-speech-5.0-2b.mmproj-Q8_0.gguf", "--alias", "granite-speech-5.0-2b", "--host", "0.0.0.0", "--port", "8082", "-c", "4096", "-ngl", "99", "--threads", "2"]
+    devices: *dri-devices
+    group_add:
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-109}"
+    volumes:
+      - models:/models:ro
+    networks:
+      - s2s
+    restart: unless-stopped
+
   s2s:
     devices: *dri-devices
     group_add:
